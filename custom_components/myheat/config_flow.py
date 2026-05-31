@@ -56,42 +56,50 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step 1: cloud auth + local-mode toggles."""
+        """Step 1: cloud auth + local-mode toggles.
+
+        Cloud creds are validated HERE, before we move on. If the user picked
+        "local only" we skip cloud validation entirely. Otherwise empty or
+        wrong creds → error stays on this screen with the checkboxes/inputs
+        preserved (instead of confusingly surfacing on the local step).
+        """
         errors: dict[str, str] = {}
 
         if user_input is not None:
             local_only = bool(user_input.get(CONF_LOCAL_ONLY))
             local_enabled = local_only or bool(user_input.get(CONF_LOCAL_ENABLED))
 
-            if local_enabled:
-                self._local = {
-                    CONF_LOCAL_ENABLED: True,
-                    CONF_LOCAL_ONLY: local_only,
-                }
-                self._auth = {
-                    CONF_USERNAME: user_input.get(CONF_USERNAME, ""),
-                    CONF_API_KEY: user_input.get(CONF_API_KEY, ""),
-                }
+            self._local = {
+                CONF_LOCAL_ENABLED: local_enabled,
+                CONF_LOCAL_ONLY: local_only,
+            }
+
+            if local_only:
+                # No cloud at all — skip cloud validation, go straight to local.
+                self._auth = {CONF_USERNAME: "", CONF_API_KEY: ""}
                 return await self.async_step_local()
 
-            # Cloud-only path (legacy)
-            self._auth = {
-                CONF_USERNAME: user_input[CONF_USERNAME],
-                CONF_API_KEY: user_input[CONF_API_KEY],
-            }
-            self._local = {
-                CONF_LOCAL_ENABLED: False,
-                CONF_LOCAL_ONLY: False,
-            }
+            # Cloud is in use (cloud-only or hybrid) — validate cloud right now.
+            username = (user_input.get(CONF_USERNAME) or "").strip()
+            api_key = (user_input.get(CONF_API_KEY) or "").strip()
 
-            self._devices = await self._get_devices(
-                username=self._auth[CONF_USERNAME],
-                api_key=self._auth[CONF_API_KEY],
-            )
-            if not self._devices:
+            if not username or not api_key:
                 errors["base"] = "invalid_auth"
             else:
-                return await self.async_step_device()
+                devices = await self._get_devices(
+                    username=username, api_key=api_key
+                )
+                if not devices:
+                    errors["base"] = "invalid_auth"
+                else:
+                    self._auth = {
+                        CONF_USERNAME: username,
+                        CONF_API_KEY: api_key,
+                    }
+                    self._devices = devices
+                    if local_enabled:
+                        return await self.async_step_local()
+                    return await self.async_step_device()
 
         return self._show_user_form(user_input, errors)
 
@@ -160,15 +168,9 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
             else:
                 if self._local[CONF_LOCAL_ONLY]:
                     return await self._finish_local_only()
-                # Cloud + local: continue to cloud device selection.
-                self._devices = await self._get_devices(
-                    username=self._auth[CONF_USERNAME],
-                    api_key=self._auth[CONF_API_KEY],
-                )
-                if not self._devices:
-                    errors["base"] = "invalid_auth"
-                else:
-                    return await self.async_step_device()
+                # Cloud was already validated on step 1 — devices are in
+                # self._devices, just proceed to device-pick step.
+                return await self.async_step_device()
 
         schema = vol.Schema(
             {
