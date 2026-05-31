@@ -1,0 +1,15 @@
+{
+  "domain": "myheat",
+  "name": "MyHeat.net",
+  "codeowners": ["@vooon"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/vooon/hass-myheat",
+  "integration_type": "device",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/vooon/hass-myheat/issues",
+  "loggers": ["myheat"],
+  "requirements": [],
+  "version": "0.7.2-myheatn",
+  "icon": "mdi:radiator"
+}

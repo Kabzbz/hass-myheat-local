@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Conta MyHeat",
+        "description": "Obtenha a chave API em https://my.myheat.net na página de preferências do utilizador",
+        "data": {
+          "username": "Utilizador",
+          "api_key": "Chave API"
+        }
+      },
+      "device": {
+        "title": "Controlador MyHeat",
+        "description": "Por favor, selecione o dispositivo conectado",
+        "data": {
+          "name": "Nome",
+          "device_id": "Dispositivo"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Erro de ligação",
+      "invalid_auth": "Erro de autenticação",
+      "unknown": "Erro desconhecido"
+    },
+    "abort": {
+      "already_configured": "Já configurado"
+    }
+  }
+}

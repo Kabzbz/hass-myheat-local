@@ -1,0 +1,51 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "MyHeat — облако и/или локально",
+        "description": "Облачный API: ключ возьмите на https://my.myheat.net (Настройки → Профиль). Если нет интернета или нужен резерв — включите локальное подключение.",
+        "data": {
+          "username": "Логин MyHeat (e-mail)",
+          "api_key": "API ключ",
+          "local_enabled": "Использовать локальное подключение (резерв при потере связи с облаком)",
+          "local_only": "Только локально (без облака)"
+        }
+      },
+      "local": {
+        "title": "Локальное подключение к контроллеру",
+        "description": "Адрес и учётка веб-интерфейса контроллера. По умолчанию login/password = myheat/myheat. Интервал/тайм-аут опроса можно оставить как есть — контроллер медленный.",
+        "data": {
+          "local_host": "IP-адрес или хост контроллера",
+          "local_login": "Локальный логин",
+          "local_password": "Локальный пароль",
+          "local_protocol": "Протокол (http / https)",
+          "local_poll_interval": "Интервал опроса в локальном режиме (сек)",
+          "local_timeout": "Тайм-аут запроса (сек)"
+        }
+      },
+      "device": {
+        "title": "MyHeat Controller",
+        "description": "Выберите облачное устройство",
+        "data": {
+          "name": "[%key:common::config_flow::data::name%]",
+          "device_id": "[%key:common::config_flow::data::device_id%]"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
+      "cannot_connect_local": "Не удалось достучаться до контроллера. Проверьте IP, login и password.",
+      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
+      "unknown": "[%key:common::config_flow::error::unknown%]"
+    },
+    "abort": {
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+    }
+  },
+  "services": {
+    "get_devices": {
+      "name": "Get Devices",
+      "description": "Get list of connected devices"
+    }
+  }
+}
