@@ -10,6 +10,6 @@
   "issue_tracker": "https://github.com/vooon/hass-myheat/issues",
   "loggers": ["myheat"],
   "requirements": [],
-  "version": "0.7.2-myheatn",
+  "version": "9.01",
   "icon": "mdi:radiator"
 }

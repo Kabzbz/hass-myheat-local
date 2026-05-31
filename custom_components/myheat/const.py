@@ -10,7 +10,7 @@ from homeassistant.const import Platform
 NAME = "MyHeat.net"
 DOMAIN = "myheat"
 DOMAIN_DATA = f"{DOMAIN}_data"
-VERSION = "0.7.3-myheatn"
+VERSION = "9.01"
 
 ATTRIBUTION = "https://myheat.net"
 MANUFACTURER = "https://myheat.net"
@@ -27,6 +27,10 @@ CONF_LOCAL_PASSWORD = "local_password"
 CONF_LOCAL_PROTOCOL = "local_protocol"
 CONF_LOCAL_POLL_INTERVAL = "local_poll_interval"
 CONF_LOCAL_TIMEOUT = "local_timeout"
+
+# Stable per-device key used as basis for entity unique_id (survives entry re-create).
+# For cloud entries it equals str(device_id); for local-only entries — f"local_{serial}".
+CONF_DEVICE_KEY = "device_key"
 
 DEFAULT_LOCAL_HOST = "192.168.1.50"
 DEFAULT_LOCAL_LOGIN = "myheat"

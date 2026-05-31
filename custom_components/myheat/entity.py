@@ -8,6 +8,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     ATTRIBUTION,
     CONF_DEVICE_ID,
+    CONF_DEVICE_KEY,
     CONF_NAME,
     DEFAULT_NAME,
     DOMAIN,
@@ -17,6 +18,23 @@ from .const import (
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
 
 _logger = logging.getLogger(__package__)
+
+
+def stable_device_key(entry: MhConfigEntry) -> str:
+    """Stable per-device key used as the unique_id base.
+
+    Order of preference (whichever is found first):
+      1) explicit CONF_DEVICE_KEY in entry.data (set during config / migration)
+      2) cloud CONF_DEVICE_ID if non-zero
+      3) fallback to entry.entry_id (legacy entries created before migration ran)
+    """
+    explicit = entry.data.get(CONF_DEVICE_KEY)
+    if explicit:
+        return str(explicit)
+    dev_id = entry.data.get(CONF_DEVICE_ID)
+    if dev_id:
+        return str(dev_id)
+    return entry.entry_id
 
 
 class MhEntity(CoordinatorEntity[MhDataUpdateCoordinator]):
@@ -30,16 +48,16 @@ class MhEntity(CoordinatorEntity[MhDataUpdateCoordinator]):
 
     @property
     def unique_id(self) -> str:
-        return self.config_entry.entry_id
+        return stable_device_key(self.config_entry)
 
     @property
     def device_info(self) -> DeviceInfo:
         name = self.config_entry.data.get(CONF_NAME, DEFAULT_NAME)
         name += self._mh_dev_name_suffix
-        
+
         # Получаем данные из координатора для дополнительной информации
         data = self.coordinator.data if self.coordinator.data else {}
-        
+
         info = DeviceInfo(
             identifiers={self._mh_identifiers},
             name=name,
@@ -47,17 +65,17 @@ class MhEntity(CoordinatorEntity[MhDataUpdateCoordinator]):
             manufacturer=MANUFACTURER,
             configuration_url="https://my.myheat.net",
         )
-        
+
         # Добавляем дополнительную информацию если available
         if data:
             info.update({
                 "sw_version": f"Severity: {data.get('severity', 1)}",
                 "serial_number": f"DeviceID: {self.config_entry.data.get(CONF_DEVICE_ID)}",
             })
-        
+
         if self._mh_identifiers != self._mh_via_device:
             info["via_device"] = self._mh_via_device
-            
+
         return info
 
     @property
@@ -66,11 +84,11 @@ class MhEntity(CoordinatorEntity[MhDataUpdateCoordinator]):
 
     @property
     def _mh_identifiers(self) -> tuple[str, str]:
-        return (DOMAIN, self.config_entry.entry_id)
+        return (DOMAIN, stable_device_key(self.config_entry))
 
     @property
     def _mh_via_device(self) -> tuple[str, str]:
-        return (DOMAIN, self.config_entry.entry_id)
+        return (DOMAIN, stable_device_key(self.config_entry))
 
     @property
     def _mh_name(self) -> str:

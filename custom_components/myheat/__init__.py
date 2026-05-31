@@ -16,6 +16,7 @@ from .api import MhApiClient
 from .const import (
     CONF_API_KEY,
     CONF_DEVICE_ID,
+    CONF_DEVICE_KEY,
     CONF_LOCAL_ENABLED,
     CONF_LOCAL_HOST,
     CONF_LOCAL_LOGIN,
@@ -30,6 +31,7 @@ from .const import (
     PLATFORMS,
     STARTUP_MESSAGE,
 )
+from homeassistant.helpers import entity_registry as er
 from .const import CONF_NAME  # noqa: F401
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
 from .local_api import MhLocalApiClient
@@ -115,3 +117,79 @@ async def async_reload_entry(hass: HomeAssistant, entry: MhConfigEntry) -> None:
     """Reload config entry."""
     await async_unload_entry(hass, entry)
     await async_setup_entry(hass, entry)
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: MhConfigEntry) -> bool:
+    """Migrate v1 entries (entry_id-based unique_ids) to v2 (device-key-based).
+
+    Computes a stable device_key for the entry (cloud device_id, or local
+    serial fetched on-the-fly, or fallback to host) and rewrites every entity
+    unique_id from the legacy ``<entry_id>...`` form to ``<device_key>...``.
+
+    HA's entity registry preserves entity_id across unique_id changes, so all
+    existing automations, dashboards and history keep working.
+    """
+    if entry.version >= 2:
+        return True
+
+    _LOGGER.info("Migrating MyHeat entry %s from v1 to v2", entry.entry_id)
+
+    # 1. Pick the new device_key
+    if entry.data.get(CONF_DEVICE_KEY):
+        device_key = str(entry.data[CONF_DEVICE_KEY])
+    elif entry.data.get(CONF_DEVICE_ID):
+        device_key = str(entry.data[CONF_DEVICE_ID])
+    else:
+        # local-only entry — fetch serial; fall back to host
+        device_key = None
+        if entry.data.get(CONF_LOCAL_HOST):
+            try:
+                session = async_get_clientsession(hass)
+                lc = MhLocalApiClient(
+                    host=entry.data[CONF_LOCAL_HOST],
+                    login=entry.data.get(CONF_LOCAL_LOGIN, ""),
+                    password=entry.data.get(CONF_LOCAL_PASSWORD, ""),
+                    session=session,
+                    protocol=entry.data.get(CONF_LOCAL_PROTOCOL, DEFAULT_LOCAL_PROTOCOL),
+                    timeout=int(
+                        entry.data.get(CONF_LOCAL_TIMEOUT, DEFAULT_LOCAL_TIMEOUT)
+                    ),
+                )
+                state = await lc.async_get_state()
+                serial = state.get("serial")
+                if serial:
+                    device_key = f"local_{serial}"
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Migration: could not fetch local serial (%s); using host fallback",
+                    exc,
+                )
+        if not device_key:
+            device_key = f"local_host_{entry.data.get(CONF_LOCAL_HOST, entry.entry_id)}"
+
+    # 2. Rewrite entity unique_ids
+    registry = er.async_get(hass)
+    old_prefix = entry.entry_id
+    entries = er.async_entries_for_config_entry(registry, entry.entry_id)
+    renamed = 0
+    for ent in entries:
+        if ent.unique_id.startswith(old_prefix):
+            new_uid = device_key + ent.unique_id[len(old_prefix):]
+            try:
+                registry.async_update_entity(ent.entity_id, new_unique_id=new_uid)
+                renamed += 1
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Migration: failed to rename %s (%s)", ent.entity_id, exc
+                )
+
+    # 3. Persist device_key in entry.data + bump version
+    new_data = {**entry.data, CONF_DEVICE_KEY: device_key}
+    hass.config_entries.async_update_entry(entry, data=new_data, version=2)
+
+    _LOGGER.info(
+        "MyHeat entry migrated: device_key=%s, renamed %d entities",
+        device_key,
+        renamed,
+    )
+    return True

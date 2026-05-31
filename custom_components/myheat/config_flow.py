@@ -16,6 +16,7 @@ from .api import MhApiClient
 from .const import (
     CONF_API_KEY,
     CONF_DEVICE_ID,
+    CONF_DEVICE_KEY,
     CONF_LOCAL_ENABLED,
     CONF_LOCAL_HOST,
     CONF_LOCAL_LOGIN,
@@ -43,7 +44,7 @@ _LOGGER = logging.getLogger(__package__)
 class MhFlowHandler(ConfigFlow, domain=DOMAIN):
     """Config flow for myheat."""
 
-    VERSION = 1
+    VERSION = 2
     CONNECTION_CLASS = CONN_CLASS_CLOUD_POLL
 
     def __init__(self) -> None:
@@ -213,6 +214,7 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
             CONF_USERNAME: self._auth[CONF_USERNAME],
             CONF_API_KEY: self._auth[CONF_API_KEY],
             CONF_DEVICE_ID: device_id,
+            CONF_DEVICE_KEY: str(device_id),
             **self._local,
         }
         await self.async_set_unique_id(unique_id)
@@ -220,19 +222,48 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(title=user_input[CONF_NAME], data=data)
 
     async def _finish_local_only(self) -> ConfigFlowResult:
-        """Create entry without cloud account (local-only install)."""
+        """Create entry without cloud account (local-only install).
+
+        Fetches the controller serial via /api/getState so that the entry
+        gets a stable CONF_DEVICE_KEY — entities will then survive a
+        delete-and-recreate of the entry without renaming.
+        """
         host = self._local[CONF_LOCAL_HOST]
-        unique_id = f"myheat_local_{host}"
+        serial = await self._fetch_local_serial()
+        device_key = f"local_{serial}" if serial else f"local_host_{host}"
+        unique_id = f"myheat_{device_key}"
         data = {
             CONF_NAME: f"MyHeat ({host})",
             CONF_USERNAME: "",
             CONF_API_KEY: "",
             CONF_DEVICE_ID: 0,
+            CONF_DEVICE_KEY: device_key,
             **self._local,
         }
         await self.async_set_unique_id(unique_id)
         self._abort_if_unique_id_configured()
         return self.async_create_entry(title=data[CONF_NAME], data=data)
+
+    async def _fetch_local_serial(self) -> str | None:
+        """Best-effort call to /api/getState to grab the controller serial."""
+        try:
+            session = async_create_clientsession(self.hass)
+            client = MhLocalApiClient(
+                host=self._local[CONF_LOCAL_HOST],
+                login=self._local[CONF_LOCAL_LOGIN],
+                password=self._local[CONF_LOCAL_PASSWORD],
+                session=session,
+                protocol=self._local.get(CONF_LOCAL_PROTOCOL, DEFAULT_LOCAL_PROTOCOL),
+                timeout=int(
+                    self._local.get(CONF_LOCAL_TIMEOUT, DEFAULT_LOCAL_TIMEOUT)
+                ),
+            )
+            state = await client.async_get_state()
+            serial = state.get("serial")
+            return str(serial) if serial else None
+        except (LocalApiError, ValueError, Exception):  # noqa: BLE001
+            _LOGGER.exception("failed to fetch local serial; falling back to host-based key")
+            return None
 
     async def _get_devices(self, username: str, api_key: str) -> list[Any]:
         """Validate cloud creds by fetching device list."""
