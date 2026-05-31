@@ -28,6 +28,7 @@ async def async_setup_entry(
                 MhSimBalanceSensor(coordinator, entry),
                 MhGsmSignalSensor(coordinator, entry),
                 MhWifiSsidSensor(coordinator, entry),
+                MhCurrentModeSensor(coordinator, entry),
             ]
         )
 
@@ -393,3 +394,60 @@ class MhWifiSsidSensor(_LocalAttrSensor):
     @property
     def unique_id(self) -> str:
         return f"{super().unique_id}wifi_ssid"
+
+
+class MhCurrentModeSensor(MhEntity, SensorEntity):
+    """Currently active heating mode or schedule, by name.
+
+    Reads from the local _local block. Shows mode name (e.g. "Дома", "Лето")
+    when a manual mode is selected, or "📅 <schedule-name>" (e.g. "📅 день-ночь")
+    when a schedule is active. Falls back to "Не выбран" when neither is set.
+
+    Available only when local mode is enabled (cloud API does not expose this).
+    """
+
+    _attr_icon = "mdi:home-thermometer"
+
+    @property
+    def name(self) -> str:
+        return f"{self._mh_name} Текущий режим"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{super().unique_id}current_mode"
+
+    @property
+    def _local(self) -> dict:
+        return ((self.coordinator.data or {}).get("_local") or {})
+
+    @property
+    def native_value(self) -> str | None:
+        local = self._local
+        h_mode = local.get("hMode")
+        sched = local.get("sched")
+
+        if h_mode:
+            for m in local.get("hModes") or []:
+                if m.get("i") == h_mode:
+                    return m.get("n")
+            return f"Режим #{h_mode}"
+        if sched:
+            for s in local.get("scheds") or []:
+                if s.get("i") == sched:
+                    return f"📅 {s.get('n')}"
+            return f"Расписание #{sched}"
+        return "Не выбран"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        local = self._local
+        return {
+            "id_режима": local.get("hMode"),
+            "id_расписания": local.get("sched"),
+            "доступные_режимы": [
+                m.get("n") for m in (local.get("hModes") or [])
+            ],
+            "доступные_расписания": [
+                s.get("n") for s in (local.get("scheds") or [])
+            ],
+        }

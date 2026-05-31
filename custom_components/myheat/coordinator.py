@@ -112,10 +112,16 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
         return data
 
     async def _refresh_local_cache_if_due(self) -> None:
-        """Background-poll local /api/getState if the cache is stale.
+        """Background-poll the local controller if the cache is stale.
 
-        Called from cloud-mode updates so that Баланс SIM / GSM / WiFi sensors
+        Called from cloud-mode updates so that the local-only sensors
+        (Баланс SIM / GSM / WiFi / Контроллер: интернет / Текущий режим)
         get fresh values without hammering the controller every 30 s.
+
+        Fetches BOTH /api/getState (connectivity, SIM, WiFi) AND
+        /api/getObjState (current mode/schedule + lookup tables), so the
+        "Текущий режим" sensor stays accurate even in cloud mode.
+        getObjState is small enough (~5 KB) to be fine once every 10 min.
         """
         if not self._local_enabled or self.local_api is None:
             return
@@ -127,10 +133,11 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
             return
         try:
             state = await self.local_api.async_get_state()
+            obj_state = await self.local_api.async_get_obj_state()
         except LocalApiError as err:
-            _LOGGER.debug("background local-state refresh failed: %s", err)
+            _LOGGER.debug("background local refresh failed: %s", err)
             return
-        translated = translate_local_to_cloud(state=state, obj_state=None)
+        translated = translate_local_to_cloud(state=state, obj_state=obj_state)
         self._local_cache = translated["_local"]
         self._local_cache_at = now
 
