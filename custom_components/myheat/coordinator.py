@@ -1,5 +1,6 @@
 from datetime import timedelta
 import logging
+import time
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -26,6 +27,10 @@ from .local_api import (
 _LOGGER = logging.getLogger(__package__)
 
 SCAN_INTERVAL = timedelta(seconds=DEFAULT_CLOUD_POLL_INTERVAL)
+
+# How often to background-refresh local /api/getState (Баланс SIM, Сигнал GSM,
+# WiFi SSID, Контроллер: интернет) when the cloud is the active source.
+LOCAL_STATE_REFRESH_SECONDS = 600  # 10 minutes
 
 type MhConfigEntry = ConfigEntry[MhDataUpdateCoordinator]
 
@@ -61,6 +66,10 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
         self._local_enabled = self._local_only or bool(
             entry.data.get(CONF_LOCAL_ENABLED)
         )
+        # Cached _local block (Баланс SIM, GSM, WiFi, inet, serial) so that
+        # local-only sensors keep working when the active source is cloud.
+        self._local_cache: dict | None = None
+        self._local_cache_at: float = 0.0
         self._cloud_interval = timedelta(seconds=DEFAULT_CLOUD_POLL_INTERVAL)
         self._local_interval = timedelta(
             seconds=int(
@@ -89,12 +98,41 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
         return self._local_only
 
     async def _fetch_local(self) -> dict:
-        """Read both /api/getState and /api/getObjState; return cloud-shaped dict."""
+        """Read both /api/getState and /api/getObjState; return cloud-shaped dict.
+
+        Also refreshes the local-state cache so cloud-mode polls reuse it.
+        """
         if self.local_api is None:
             raise LocalApiError("local client is not configured")
         state = await self.local_api.async_get_state()
         obj_state = await self.local_api.async_get_obj_state()
-        return translate_local_to_cloud(state=state, obj_state=obj_state)
+        data = translate_local_to_cloud(state=state, obj_state=obj_state)
+        self._local_cache = data["_local"]
+        self._local_cache_at = time.monotonic()
+        return data
+
+    async def _refresh_local_cache_if_due(self) -> None:
+        """Background-poll local /api/getState if the cache is stale.
+
+        Called from cloud-mode updates so that Баланс SIM / GSM / WiFi sensors
+        get fresh values without hammering the controller every 30 s.
+        """
+        if not self._local_enabled or self.local_api is None:
+            return
+        now = time.monotonic()
+        if (
+            self._local_cache is not None
+            and (now - self._local_cache_at) < LOCAL_STATE_REFRESH_SECONDS
+        ):
+            return
+        try:
+            state = await self.local_api.async_get_state()
+        except LocalApiError as err:
+            _LOGGER.debug("background local-state refresh failed: %s", err)
+            return
+        translated = translate_local_to_cloud(state=state, obj_state=None)
+        self._local_cache = translated["_local"]
+        self._local_cache_at = now
 
     def _apply_interval_for_source(self) -> None:
         """Adjust update_interval to match the currently active source."""
@@ -125,6 +163,11 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
                 data = await self.api.async_get_device_info()
                 self.active_source = SOURCE_CLOUD
                 self._apply_interval_for_source()
+                # Even in cloud mode, refresh local-state cache every 10 min
+                # so that Баланс SIM/GSM/WiFi/inet sensors keep showing values.
+                await self._refresh_local_cache_if_due()
+                if self._local_cache is not None:
+                    data["_local"] = self._local_cache
                 return data
             except Exception as err:  # noqa: BLE001 — cloud client raises many types
                 cloud_err = err
