@@ -2,12 +2,12 @@
 
 from itertools import chain
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import UnitOfTemperature, UnitOfPressure
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import SOURCE_LOCAL, SOURCE_OFFLINE
+from .const import SOURCE_CLOUD, SOURCE_LOCAL, SOURCE_OFFLINE
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
 from .entity import MhEntity, MhHeaterEntity, MhEnvEntity, MhEngEntity
 
@@ -310,9 +310,16 @@ class MhEngStateSensor(MhEngEntity, SensorEntity):
 
 
 class MhActiveSourceSensor(MhEntity, SensorEntity):
-    """Shows which API is currently feeding data: cloud / local / offline."""
+    """Shows which API is currently feeding data: cloud / local / offline.
+
+    Uses translation_key so the state value itself is localised via
+    translations/<lang>.json (entity.sensor.active_source.state.*).
+    """
 
     _attr_icon = "mdi:cloud-sync"
+    _attr_translation_key = "active_source"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = [SOURCE_CLOUD, SOURCE_LOCAL, SOURCE_OFFLINE]
 
     @property
     def name(self) -> str:

@@ -26,5 +26,16 @@
     "abort": {
       "already_configured": "Already configured"
     }
+  },
+  "entity": {
+    "sensor": {
+      "active_source": {
+        "state": {
+          "cloud": "Cloud",
+          "local": "Local",
+          "offline": "Offline"
+        }
+      }
+    }
   }
 }

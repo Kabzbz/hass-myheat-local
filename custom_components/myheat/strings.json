@@ -47,5 +47,16 @@
       "name": "Get Devices",
       "description": "Get list of connected devices"
     }
+  },
+  "entity": {
+    "sensor": {
+      "active_source": {
+        "state": {
+          "cloud": "Облако",
+          "local": "Локально",
+          "offline": "Оффлайн"
+        }
+      }
+    }
   }
 }

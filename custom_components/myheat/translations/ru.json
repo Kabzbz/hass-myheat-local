@@ -41,5 +41,16 @@
     "abort": {
       "already_configured": "Устройство уже настроено"
     }
+  },
+  "entity": {
+    "sensor": {
+      "active_source": {
+        "state": {
+          "cloud": "Облако",
+          "local": "Локально",
+          "offline": "Оффлайн"
+        }
+      }
+    }
   }
 }
