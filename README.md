@@ -55,85 +55,295 @@ Vooon выпустил v0.9.0 (31 мая 2026) с заявкой «Add local API
 ## Требования
 
 - Home Assistant **2024.10+**
-- Python **3.12+**
+- Python **3.12+** (есть в HAOS 13+ и в Container/Core при правильной установке)
 - Контроллер MyHeat с прошивкой, поддерживающей локальный веб-интерфейс (большинство современных моделей с ESP32)
 
-## Установка
+---
 
-### Через HACS (рекомендуется)
+# 📦 Установка
 
-1. HACS → ⋮ → **Custom repositories**
-2. Repository: `https://github.com/Kabzbz/hass-myheat-local`
-3. Type: **Integration** → Add
-4. Найди **MyHeat (local + cloud, RU)** в списке HACS → Install
-5. Перезагрузи Home Assistant
-6. Settings → Devices & Services → Add Integration → **MyHeat.net**
+## Способ 1. Через HACS (рекомендуется)
 
-### Вручную
+### 1.1. Убедись, что у тебя установлен HACS
 
-1. Скачай содержимое `custom_components/myheat/` из этого репо
-2. Скопируй в `<HA config>/custom_components/myheat/`
-3. Перезагрузи HA
-4. Settings → Devices & Services → Add Integration → **MyHeat.net**
+Если HACS ещё нет — см. https://hacs.xyz/docs/use/download/download/ (несколько минут).
 
-## Настройка
+### 1.2. Добавь этот репозиторий как Custom repository
 
-### Шаг 1: облако + галочки локального
+1. Открой **HACS** (в боковом меню HA)
+2. В правом верхнем углу нажми три точки **⋮** → **Custom repositories**
+3. В появившемся диалоге заполни:
+   - **Repository**: `https://github.com/Kabzbz/hass-myheat-local`
+   - **Type**: **Integration**
+4. Жми **ADD** → закрой диалог
 
-| Поле | Описание |
+### 1.3. Установи интеграцию
+
+1. В HACS в строке поиска набери **MyHeat**
+2. Кликни карточку **MyHeat (local + cloud, RU)**
+3. Жми **DOWNLOAD** (правый нижний угол) → **DOWNLOAD** ещё раз для подтверждения
+4. **Перезагрузи Home Assistant**:
+   - Settings → System → правый верхний угол ⋮ → **Restart Home Assistant** → **Restart**
+
+### 1.4. Добавь интеграцию
+
+1. После рестарта: **Settings** → **Devices & Services** → **+ ADD INTEGRATION** (правый нижний угол)
+2. В поиске набери **MyHeat** → кликни **MyHeat.net**
+3. Откроется мастер настройки — см. раздел **«Конфигурация»** ниже
+
+### 1.5. (Опционально) Обновления
+
+Когда выйдет новая версия — HACS покажет уведомление, жми **UPDATE** → перезагрузка HA.
+
+---
+
+## Способ 2. Вручную (без HACS)
+
+### 2.1. Скачай файлы
+
+1. Открой https://github.com/Kabzbz/hass-myheat-local/releases/latest
+2. Скачай `Source code (zip)`
+3. Распакуй
+
+### 2.2. Скопируй в HA
+
+Скопируй папку `custom_components/myheat/` из распакованного архива в папку конфигурации HA так, чтобы получилось:
+
+```
+<HA config>/custom_components/myheat/
+├── __init__.py
+├── api.py
+├── local_api.py
+├── manifest.json
+└── ...
+```
+
+Где `<HA config>`:
+- **HAOS / Supervised**: на хосте по адресу `\\<HA_IP>\config\` (Samba addon) или через **File editor / Studio Code Server**
+- **Container (Docker)**: то, что замаплено в `-v <path>:/config`
+- **Core**: твоя папка конфигурации (обычно `~/.homeassistant/`)
+
+### 2.3. Перезагрузи HA
+
+Settings → System → ⋮ → **Restart Home Assistant**.
+
+### 2.4. Добавь интеграцию
+
+Settings → Devices & Services → + ADD INTEGRATION → найди **MyHeat.net**.
+
+---
+
+# ⚙️ Конфигурация (мастер настройки)
+
+После выбора **MyHeat.net** откроется 2-3 шага.
+
+## Шаг 1. Аккаунт и режим работы
+
+![шаг 1: галочки локального режима](docs/step1.png)
+
+| Поле | Что вводить |
 |---|---|
-| Логин MyHeat (e-mail) | для облачного API (можно оставить пустым, если выбран «только локально») |
-| API ключ | возьми на https://my.myheat.net → Настройки → Профиль |
-| Использовать локальное подключение (резерв) | ✅ — включает fallback на local при сбое облака |
-| Только локально (без облака) | ✅ — для установки совсем без интернета |
+| **Логин MyHeat (e-mail)** | твой e-mail на myheat.net. **Оставь пустым, если ставишь «Только локально»** |
+| **API ключ** | возьми на https://my.myheat.net → клик по своему имени в правом верхнем углу → **Профиль** → раздел **API ключ** → скопировать. Оставь пустым в local-only режиме |
+| **Использовать локальное подключение (резерв)** | ☑ галочка — включает hybrid режим. Опрашивается облако, при сбое автопереход на local |
+| **Только локально (без облака)** | ☑ галочка — для тех, у кого вообще нет интернета. Облако не используется совсем |
 
-### Шаг 2: локальные параметры (если включено)
+**Возможные сочетания:**
 
-| Поле | Default | Описание |
+| Логин/ключ | Резерв | Только локально | Что будет |
+|---|---|---|---|
+| есть | ☐ | ☐ | Cloud-only (как было у vooon) |
+| есть | ☑ | ☐ | **Hybrid (рекомендуется)** |
+| пусто | ☐ | ☑ | Local-only |
+| пусто | ☑ | ☐ | ⚠ не сработает — нужны cloud-credentials для cloud-режима |
+
+Жми **SUBMIT**.
+
+## Шаг 2. Локальные параметры (только если включён локальный режим)
+
+Появится, только если на шаге 1 поставлена хотя бы одна галочка.
+
+| Поле | Default | Где взять |
 |---|---|---|
-| IP-адрес или хост контроллера | `192.168.1.50` | смотри в роутере / в приложении MyHeat |
-| Локальный логин | `myheat` | заводской по умолчанию |
-| Локальный пароль | `myheat` | заводской по умолчанию |
-| Протокол | `http` | большинство прошивок используют http |
-| Интервал опроса в локальном режиме | 30 с | контроллер медленный, ниже 15 с не ставить |
-| Тайм-аут запроса | 30 с | если контроллер тормозит — увеличить |
+| **IP-адрес или хост контроллера** | `192.168.1.50` | смотри в роутере (DHCP-клиенты, ищи устройство с производителем Espressif/MAC начинается с `ac:0b:fb`) или в приложении MyHeat → Настройки → Сеть |
+| **Локальный логин** | `myheat` | заводской по умолчанию; если не менял — оставь как есть |
+| **Локальный пароль** | `myheat` | заводской по умолчанию |
+| **Протокол** | `http` | большинство прошивок используют http; пробуй `https` только если знаешь, что у тебя оно есть |
+| **Интервал опроса в локальном режиме** | `30` сек | контроллер медленный, ниже 15 с не ставить |
+| **Тайм-аут запроса** | `30` сек | если контроллер совсем тормозит (бывает «через раз») — увеличь до 60-90 |
 
-### Шаг 3: выбор облачного устройства (если не «только локально»)
+После SUBMIT интеграция **проверит, что контроллер отвечает и логин/пароль приняты**. Если что-то не так — покажет ошибку «Не удалось достучаться до контроллера».
 
-Стандартный шаг как в upstream.
+### Если ошибка «cannot_connect_local»
 
-## Что появится в HA
+1. Открой в браузере `http://<IP контроллера>/` — должна появиться страница логина MyHeat
+2. Если не открывается:
+   - проверь IP: `ping <IP>` из консоли (Windows: cmd; Linux/HA: Terminal addon)
+   - может, IP сменился — посмотри в роутере
+   - перезагрузи контроллер по питанию (выключи автомат на 30 сек), он часто оживает после reset
+   - контроллер реально тупит — попробуй через минуту ещё раз
+3. Если страница открывается, но логин не пускает: попробуй стандартные `myheat`/`myheat`. Если не подходит — посмотри в приложении MyHeat настройки или сбрось контроллер к заводским
 
-При включённом local API дополнительно к стандартному набору сущностей:
+## Шаг 3. Выбор облачного устройства (только если облако включено)
 
-- `sensor.<имя>_источник_данных` — `cloud` / `local` / `offline`
-- `sensor.<имя>_баланс_sim` — баланс ₽ из local
+| Поле | Что |
+|---|---|
+| **Имя** | как назвать в HA (например `MyHeat Дача`) |
+| **Устройство** | выпадающий список облачных контроллеров — выбери нужный |
+
+SUBMIT → готово.
+
+---
+
+# 🏠 Что появится в Home Assistant
+
+После добавления увидишь устройство **MyHeat** в Settings → Devices & Services → MyHeat.net.
+
+## Сущности (entity), которые точно будут
+
+**Климат:**
+- `climate.<имя>_<контур_отопления>` — для каждого heating circuit / floor / room
+- `water_heater.<имя>_<гвс>` — для каждого DHW / boiler_temperature
+
+**Температуры:**
+- `sensor.<имя>_<контур>_температура` — текущая по каждому датчику
+- `sensor.<имя>_<контур>_цель` — целевая
+- `sensor.<имя>_котел_<...>` — flowTemp, returnTemp, pressure, modulation (модуляция только в cloud)
+- `sensor.<имя>_уличная_температура` (cloud, weatherTemp)
+
+**Состояние:**
+- `sensor.<имя>_статус` (severity)
+- `binary_sensor.<имя>_тревоги_активны`
+- `binary_sensor.<имя>_подключение` (`dataActual` — есть ли свежие данные)
+- `binary_sensor.<имя>_<котел>_горелка` — общее состояние
+- `binary_sensor.<имя>_<котел>_горелка_отопление`
+- `binary_sensor.<имя>_<котел>_горелка_гвс`
+
+**Оборудование:**
+- `binary_sensor.<имя>_<насос/клапан>_включено`
+- `sensor.<имя>_<оборудование>_статус`
+
+**Запрос тепла:**
+- `binary_sensor.<имя>_<контур>_запрос_тепла`
+
+## Дополнительно при включённом локальном API
+
+- `sensor.<имя>_источник_данных` → `cloud` / `local` / `offline`
+- `sensor.<имя>_баланс_sim` → ₽ из local
 - `sensor.<имя>_сигнал_gsm`
 - `sensor.<имя>_wifi_ssid`
 - `binary_sensor.<имя>_облако_доступно` — горит когда сейчас источник=cloud
 - `binary_sensor.<имя>_контроллер_интернет` — что сам прибор видит про инет
 
-## Совместимость с существующей установкой vooon
+## Примеры использования в автоматизациях
+
+**Уведомление о смене источника на local:**
+```yaml
+automation:
+  - alias: MyHeat ушёл на резерв
+    trigger:
+      - platform: state
+        entity_id: sensor.myheat_источник_данных
+        to: local
+    action:
+      - service: notify.notify
+        data:
+          message: "MyHeat: облако недоступно, переключился на локальный API"
+```
+
+**Уведомление о минусе на SIM:**
+```yaml
+automation:
+  - alias: MyHeat SIM минус
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.myheat_баланс_sim
+        below: 0
+    action:
+      - service: notify.notify
+        data:
+          message: "Пополни SIM в MyHeat — баланс {{ states('sensor.myheat_баланс_sim') }} ₽"
+```
+
+**Уведомление об отсутствии интернета на контроллере:**
+```yaml
+automation:
+  - alias: MyHeat контроллер без интернета
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.myheat_контроллер_интернет
+        to: 'off'
+        for: '00:05:00'
+    action:
+      - service: notify.notify
+        data:
+          message: "Контроллер MyHeat 5 минут без интернета (WiFi/GSM не отвечает)"
+```
+
+---
+
+# 🔁 Совместимость с существующей установкой vooon
 
 Безопасно ставить **поверх** vooon 0.6.x / 0.7.1:
-- `unique_id` сущностей не менялись → entity_id и история **сохраняются**
-- Все ваши автоматизации и дашборды продолжат работать
+- `unique_id` сущностей не менялись → `entity_id` и история **сохраняются**
+- Все автоматизации и дашборды продолжат работать
 - Если локальный режим не включён — поведение полностью эквивалентно upstream
 
-⚠️ После установки `0.9.0` от vooon (если ставили) — снесите его, он не запускался. Эту интеграцию можно ставить с нуля или поверх 0.6.x / 0.7.1.
+**Порядок миграции с vooon:**
+1. (опционально) HACS → vooon/hass-myheat → REMOVE (или оставь — не помешает, но удобнее снести)
+2. HACS → Custom repositories → добавь `https://github.com/Kabzbz/hass-myheat-local` тип Integration
+3. HACS → DOWNLOAD → Restart HA
+4. Settings → Devices & Services → найди существующую MyHeat — **она продолжит работать как раньше**
+5. Чтобы получить новые фичи — удали старую интеграцию и добавь заново, либо настрой через Options (если доступно)
 
-## Команды, не поддерживаемые в local-only режиме
+⚠️ После установки `0.9.0` от vooon (если ставил) — снеси его, он не запускался. Эту интеграцию можно ставить с нуля или поверх 0.6.x / 0.7.1.
 
-Все 5 управляющих методов API (setEnvGoal, setEnvCurve, setEngGoal, setHeatingMode, setSecurityMode) имеют локальные эквиваленты через `setObjState` — работают и в local-only. Если в будущей версии добавятся cloud-only команды, в local-режиме они вернут ошибку «В локальном режиме не поддерживается».
+---
 
-## Известные ограничения local API
+# 🐛 Troubleshooting
 
-Локальный API контроллера **не отдаёт**:
-- % модуляции горелки (cloud отдаёт)
-- Историю / графики
-- Уличную температуру и название города
+## Источник данных всё время `offline`
 
-Эти поля в local-режиме заполняются нулями / `None`.
+- Проверь логи: Settings → System → Logs → search `myheat`
+- Проверь облачные creds: открой `https://my.myheat.net` → залогинься тем же login/key
+- Если включён локальный: проверь, что контроллер пингуется
+
+## Источник всё время `local`, облако недоступно
+
+- Проверь интернет на HA: Settings → System → Logs → search `connectivity`
+- Проверь, что myheat.net вообще доступен: `curl -I https://my.myheat.net`
+- Если у тебя ключ API устарел — перегенерируй на myheat.net и обнови интеграцию (Settings → Devices → MyHeat → ⋮ → Reconfigure, если доступно; иначе удалить и добавить заново)
+
+## Сенсор «Баланс SIM» показывает `unknown`
+
+- Только при `Источник данных = local` показывается
+- Если ты в облачном режиме всё время — это нормально, поле берётся только из local API
+- Включи `Использовать локальное подключение` в настройках интеграции
+
+## «Контур отопления» стал water_heater
+
+В этом форке такого быть не должно (см. фикс issue #197). Если всё-таки — посмотри в logs тип среды (`type=...`) и заведи issue в этом репо.
+
+## Контроллер тупит, постоянно «cannot_connect_local»
+
+Контроллер MyHeat реально вешает HTTP при перегрузке. Симптомы:
+- ARP-таблица знает MAC, но TCP не отвечает
+- Пинг проходит, но `curl http://<ip>/` таймаутит
+
+Лечение:
+- Подожди 1-2 минуты — обычно поднимается само
+- Перезагрузи контроллер по питанию (автомат на 30 сек)
+- В настройках интеграции увеличь `Тайм-аут запроса` до 60-90 секунд
+
+## Логи для багрепорта
+
+```
+Settings → System → Logs → Download Full Log
+```
+
+Прикрепи к issue в этом репо: https://github.com/Kabzbz/hass-myheat-local/issues
+
+---
 
 ## Credits
 
@@ -160,6 +370,14 @@ Fork of [vooon/hass-myheat](https://github.com/vooon/hass-myheat) adding:
 - **Russian UI** and entity attributes
 - Many extra sensors (alarms, combined burner, demand for all env types, additional temperature sensors)
 
-Install via HACS custom repository: `https://github.com/Kabzbz/hass-myheat-local`.
+### Quick install
 
-See the Russian section above for full feature comparison and configuration walkthrough.
+1. HACS → ⋮ → Custom repositories → `https://github.com/Kabzbz/hass-myheat-local` → type **Integration** → Add
+2. Download in HACS → Restart HA
+3. Settings → Devices & Services → Add Integration → **MyHeat.net**
+4. Fill in cloud creds (from https://my.myheat.net → Profile → API key) and/or tick local mode
+5. If local: enter controller IP (default `192.168.1.50`), login/password (default `myheat`/`myheat`)
+
+Default poll interval and timeout are both 30 s — the controller is slow, don't go below 15 s.
+
+See the Russian section above for the full feature comparison, screenshots, troubleshooting and automation examples.
