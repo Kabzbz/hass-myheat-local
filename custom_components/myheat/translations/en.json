@@ -36,6 +36,22 @@
           "offline": "Offline"
         }
       }
+    },
+    "water_heater": {
+      "dhw": {
+        "state": {
+          "on": "On",
+          "off": "Off"
+        },
+        "state_attributes": {
+          "operation_mode": {
+            "state": {
+              "on": "On",
+              "off": "Off"
+            }
+          }
+        }
+      }
     }
   }
 }

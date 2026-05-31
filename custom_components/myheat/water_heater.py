@@ -42,6 +42,10 @@ async def async_setup_entry(
 class MhEnvWaterHeater(MhEnvEntity, WaterHeaterEntity):
     """myheat WaterHeater class."""
 
+    # Translation key — values translated via translations/<lang>.json
+    # under entity.water_heater.dhw.state.* (and ...state_attributes.operation.state.*)
+    _attr_translation_key = "dhw"
+
     _attr_target_temperature_high = 85.0
     _attr_target_temperature_low = 7.0
     _attr_target_temperature_step = 0.5

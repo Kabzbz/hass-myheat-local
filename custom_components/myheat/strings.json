@@ -57,6 +57,22 @@
           "offline": "Оффлайн"
         }
       }
+    },
+    "water_heater": {
+      "dhw": {
+        "state": {
+          "on": "Включено",
+          "off": "Выключено"
+        },
+        "state_attributes": {
+          "operation_mode": {
+            "state": {
+              "on": "Включено",
+              "off": "Выключено"
+            }
+          }
+        }
+      }
     }
   }
 }
