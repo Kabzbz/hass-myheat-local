@@ -8,9 +8,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .api import ENV_TYPE_HUMIDITY
+from .burner import burner_entities_for
 from .const import SOURCE_CLOUD, SOURCE_LOCAL, SOURCE_OFFLINE
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
-from .entity import MhEntity, MhHeaterEntity, MhEnvEntity, MhEngEntity
+from .entity import MhEntity, MhHeaterEntity, MhEnvEntity, MhEngEntity, stable_device_key
 
 
 async def async_setup_entry(
@@ -64,6 +65,8 @@ async def async_setup_entry(
             if env.get("type") not in ["room_temperature", "circuit_temperature", "boiler_temperature", "temperature"]
             and isinstance(env.get("value"), (int, float))
         ),
+        # after the heater entities, so the boiler device already exists
+        burner_entities_for(coordinator, entry, stable_device_key(entry), "sensor"),
     )
 
     async_add_entities(entities)

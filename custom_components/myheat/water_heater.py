@@ -77,6 +77,8 @@ class MhEnvWaterHeater(MhEnvEntity, WaterHeaterEntity):
 
         self._attr_current_temperature = None
         self._attr_target_temperature = None
+        # Fill state right away instead of showing "unknown" until the next poll.
+        self._update_from_data()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the water heater on."""
@@ -113,17 +115,19 @@ class MhEnvWaterHeater(MhEnvEntity, WaterHeaterEntity):
             "is_burning": e.get("demand", False),
         }
 
-    @callback
-    def _handle_coordinator_update(self):
-        """Get the latest state from the thermostat."""
-
+    def _update_from_data(self) -> None:
         e = self.get_env()
+        if not e:
+            return
         target = e.get("target")
-
         self._attr_current_temperature = e.get("value")
         self._attr_target_temperature = target or 0.0
         self._attr_current_operation = (
             OPERATION_MODE_ON if target is not None else OPERATION_MODE_OFF
         )
 
+    @callback
+    def _handle_coordinator_update(self):
+        """Get the latest state from the thermostat."""
+        self._update_from_data()
         self.async_write_ha_state()

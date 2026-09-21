@@ -6,7 +6,9 @@
         "description": "Please obtain API key from https://my.myheat.net on user preferences page",
         "data": {
           "username": "User",
-          "api_key": "API Key"
+          "api_key": "API Key",
+          "local_enabled": "Use local connection (fallback when the cloud is down)",
+          "local_only": "Local only (no cloud)"
         }
       },
       "device": {
@@ -16,12 +18,26 @@
           "name": "Name",
           "device_id": "Device"
         }
+      },
+      "local": {
+        "title": "Local connection to the controller",
+        "description": "Address and credentials of the controller web interface. Defaults are myheat/myheat. Poll interval and timeout can stay as they are - the controller is slow.",
+        "data": {
+          "local_host": "Controller IP address or host",
+          "local_login": "Local login",
+          "local_password": "Local password",
+          "local_protocol": "Protocol (http / https)",
+          "local_poll_interval": "Local poll interval (s)",
+          "local_timeout": "Request timeout (s)",
+          "burner_poll_interval": "Burner poll interval, s (accurate run time)"
+        }
       }
     },
     "error": {
       "cannot_connect": "Connection error",
       "invalid_auth": "Auth error",
-      "unknown": "Unknown error"
+      "unknown": "Unknown error",
+      "cannot_connect_local": "Cannot reach the controller. Check IP, login and password."
     },
     "abort": {
       "already_configured": "Already configured"
@@ -40,7 +56,8 @@
           "local_password": "Local password",
           "local_protocol": "Protocol (http / https)",
           "local_poll_interval": "Local poll interval (s)",
-          "local_timeout": "Request timeout (s)"
+          "local_timeout": "Request timeout (s)",
+          "burner_poll_interval": "Burner poll interval, s (accurate run time)"
         }
       }
     },

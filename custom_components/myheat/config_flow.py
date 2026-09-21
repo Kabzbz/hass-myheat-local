@@ -17,6 +17,7 @@ import voluptuous as vol
 from .api import MhApiClient
 from .const import (
     CONF_API_KEY,
+    CONF_BURNER_POLL_INTERVAL,
     CONF_DEVICE_ID,
     CONF_DEVICE_KEY,
     CONF_LOCAL_ENABLED,
@@ -29,6 +30,7 @@ from .const import (
     CONF_LOCAL_TIMEOUT,
     CONF_NAME,
     CONF_USERNAME,
+    DEFAULT_BURNER_POLL_INTERVAL,
     DEFAULT_LOCAL_HOST,
     DEFAULT_LOCAL_LOGIN,
     DEFAULT_LOCAL_PASSWORD,
@@ -161,6 +163,11 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
                     CONF_LOCAL_TIMEOUT: int(
                         user_input.get(CONF_LOCAL_TIMEOUT, DEFAULT_LOCAL_TIMEOUT)
                     ),
+                    CONF_BURNER_POLL_INTERVAL: int(
+                        user_input.get(
+                            CONF_BURNER_POLL_INTERVAL, DEFAULT_BURNER_POLL_INTERVAL
+                        )
+                    ),
                 }
             )
 
@@ -194,6 +201,9 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
                 vol.Optional(
                     CONF_LOCAL_TIMEOUT, default=DEFAULT_LOCAL_TIMEOUT
                 ): vol.All(int, vol.Range(min=10, max=120)),
+                vol.Optional(
+                    CONF_BURNER_POLL_INTERVAL, default=DEFAULT_BURNER_POLL_INTERVAL
+                ): vol.All(int, vol.Range(min=5, max=300)),
             }
         )
         return self.async_show_form(
@@ -370,6 +380,11 @@ class MhOptionsFlow(OptionsFlow):
                         CONF_LOCAL_TIMEOUT: int(
                             user_input.get(CONF_LOCAL_TIMEOUT, DEFAULT_LOCAL_TIMEOUT)
                         ),
+                        CONF_BURNER_POLL_INTERVAL: int(
+                            user_input.get(
+                                CONF_BURNER_POLL_INTERVAL, DEFAULT_BURNER_POLL_INTERVAL
+                            )
+                        ),
                     }
                 )
                 # async_update_entry fires the entry's update listener, which
@@ -414,6 +429,13 @@ class MhOptionsFlow(OptionsFlow):
                     CONF_LOCAL_TIMEOUT,
                     default=int(current.get(CONF_LOCAL_TIMEOUT) or DEFAULT_LOCAL_TIMEOUT),
                 ): vol.All(int, vol.Range(min=10, max=120)),
+                vol.Optional(
+                    CONF_BURNER_POLL_INTERVAL,
+                    default=int(
+                        current.get(CONF_BURNER_POLL_INTERVAL)
+                        or DEFAULT_BURNER_POLL_INTERVAL
+                    ),
+                ): vol.All(int, vol.Range(min=5, max=300)),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

@@ -6,9 +6,10 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .burner import burner_entities_for
 from .const import SOURCE_CLOUD
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
-from .entity import MhEngEntity, MhEntity, MhEnvEntity, MhHeaterEntity
+from .entity import MhEngEntity, MhEntity, MhEnvEntity, MhHeaterEntity, stable_device_key
 
 
 async def async_setup_entry(
@@ -61,6 +62,8 @@ async def async_setup_entry(
             ]
             for eng in coordinator.data.get("engs", [])
         ),
+        # after the heater entities, so the boiler device already exists
+        burner_entities_for(coordinator, entry, stable_device_key(entry), "binary_sensor"),
     )
 
     async_add_entities(entities)

@@ -37,10 +37,17 @@ LOCAL_T_HEATING_CIRCUIT = 102 # heating circuit (supply)
 LOCAL_T_DHW_CIRCUIT = 103     # DHW circuit
 LOCAL_T_PROBE = 112           # generic temperature probe (e.g. boiler-room sensor)
 
-# Heater "f" flag bits, derived empirically by comparing snapshots:
-# value went from f=2349 (boiler firing, supply 57.5°C) to f=2336 (boiler off, supply 27.5°C).
-# Diff was bits 0/2/3. The safest single-bit check for "burner on" is bit 0.
-HEATER_FLAG_BURNER_ON = 0x1
+# Heater "f" bits. Verified on a real controller with 5 s sampling:
+#   idle 0x920; hot-water tap open -> 0x935 (bits 0,2,4) while supply rose
+#   31.5 -> 51 C; tap closed -> bits 0 and 4 gone within 5 s, bit 2 gone
+#   20 s later (pump overrun). Heating snapshot: 0x92D (bits 0,2,3).
+# Link/fault bits come from the controller's own web UI (getSeverityDesc).
+HEATER_FLAG_FLAME = 0x0001
+HEATER_FLAG_FAULT = 0x0002
+HEATER_FLAG_PUMP = 0x0004
+HEATER_FLAG_CH = 0x0008
+HEATER_FLAG_DHW = 0x0010
+HEATER_FLAG_LINK = 0x0020
 
 
 class LocalApiError(Exception):
@@ -188,12 +195,20 @@ class MhLocalApiClient:
         mode_id: int | None = None,
         schedule_id: int | None = None,
     ) -> None:
-        payload: dict[str, Any] = {"action": "setHeatingMode"}
-        if mode_id is not None:
-            payload["mode"] = int(mode_id)
-        if schedule_id is not None:
-            payload["schedule"] = int(schedule_id)
-        await self._post_with_relogin("/api/setObjState", payload)
+        # Same payload as the controller's web UI: both keys are always sent,
+        # the unused one is -1; both -1 means "Режим не выбран". The cloud
+        # convention "0 = reset" is mapped to -1 as well.
+        mode = int(mode_id) if mode_id and int(mode_id) > 0 else -1
+        schedule = int(schedule_id) if schedule_id and int(schedule_id) > 0 else -1
+        if mode > 0:
+            schedule = -1
+        result = await self._post_with_relogin(
+            "/api/setObjState",
+            {"action": "setHeatingMode", "mode": mode, "schedule": schedule},
+        )
+        # The web UI treats only status == 1 as success.
+        if isinstance(result, dict) and "status" in result and result["status"] not in (1, True):
+            raise LocalApiError(f"controller rejected setHeatingMode: {result}")
 
     async def async_set_security_mode(self, *, mode: bool) -> None:
         action = "armSecurity" if mode else "disarmSecurity"
@@ -248,22 +263,25 @@ def translate_local_to_cloud(
     for h in obj.get("heaters", []) or []:
         st = h.get("st") or {}
         flags = int(h.get("f") or 0)
+        # The controller's own web UI labels p100 "Подающая линия" and
+        # p101 "Обратная линия"; the boiler target is not exposed locally.
         flow = _safe_float(st.get("p100"))
-        target = _safe_float(st.get("p101"))
+        ret = _safe_float(st.get("p101"))
         pressure = _safe_float(st.get("p109"))
-        burner_on = bool(flags & HEATER_FLAG_BURNER_ON)
+        flame = bool(flags & HEATER_FLAG_FLAME)
         heaters.append(
             {
                 "id": h.get("i"),
                 "name": h.get("n"),
                 "disabled": False,
-                "flowTemp": flow if flow is not None else 0.0,
-                "returnTemp": flow if flow is not None else 0.0,
+                "flowTemp": flow,
+                "returnTemp": ret,
                 "pressure": pressure,
-                "targetTemp": target if target is not None else 0.0,
-                "burnerHeating": burner_on,
-                "burnerWater": False,
-                "modulation": 0,  # not exposed locally
+                "targetTemp": None,
+                "burnerHeating": flame and bool(flags & HEATER_FLAG_CH),
+                "burnerWater": flame and bool(flags & HEATER_FLAG_DHW),
+                "modulation": None,  # not exposed locally
+                "_flags": flags,
             }
         )
 

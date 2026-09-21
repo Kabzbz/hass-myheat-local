@@ -332,3 +332,105 @@ async def test_config_flow_local_only_creates_entry(hass, aioclient_mock):
     assert result["type"] == "create_entry"
     assert result["data"][CONF_DEVICE_KEY] == f"local_{SERIAL}"
     await hass.async_block_till_done()
+
+
+ROOM_CLIMATE = "climate.myheat_192_168_1_50_temperatura_pomeshcheniia"
+
+
+async def test_presets_come_from_controller(hass, aioclient_mock):
+    mock_local(aioclient_mock)
+    await setup(hass, local_data())
+    st = hass.states.get(ROOM_CLIMATE)
+    assert st is not None
+    assert st.attributes["preset_modes"] == [
+        "none", "Дома", "Лето", "На работе", "Ночь", "Отпуск", "📅 день-ночь",
+    ]
+    # fixture: schedule 1 active, no manual mode
+    assert st.attributes["preset_mode"] == "📅 день-ночь"
+    # state is filled right at startup, not "off" until the next poll
+    assert st.state == "heat"
+    assert st.attributes["current_temperature"] == 22.6  # HA rounds to 0.1
+
+
+def set_obj_calls(aioclient_mock):
+    return [c[2] for c in aioclient_mock.mock_calls if str(c[1]).endswith("/api/setObjState")]
+
+
+async def test_set_preset_sends_web_ui_payload(hass, aioclient_mock):
+    mock_local(aioclient_mock)
+    aioclient_mock.post(f"{BASE}/api/setObjState", json={"status": 1}, headers=JSON)
+    await setup(hass, local_data())
+    for preset in ("Лето", "📅 день-ночь", "none"):
+        await hass.services.async_call(
+            "climate", "set_preset_mode",
+            {"entity_id": ROOM_CLIMATE, "preset_mode": preset}, blocking=True,
+        )
+    await hass.async_block_till_done()
+    assert set_obj_calls(aioclient_mock) == [
+        {"action": "setHeatingMode", "mode": 2, "schedule": -1},
+        {"action": "setHeatingMode", "mode": -1, "schedule": 1},
+        {"action": "setHeatingMode", "mode": -1, "schedule": -1},
+    ]
+
+
+async def test_set_preset_rejected_by_controller(hass, aioclient_mock):
+    mock_local(aioclient_mock)
+    aioclient_mock.post(f"{BASE}/api/setObjState", json={"status": 0}, headers=JSON)
+    await setup(hass, local_data())
+    import pytest
+    with pytest.raises(Exception):
+        await hass.services.async_call(
+            "climate", "set_preset_mode",
+            {"entity_id": ROOM_CLIMATE, "preset_mode": "Лето"}, blocking=True,
+        )
+
+
+async def test_cloud_only_keeps_legacy_presets(hass, aioclient_mock):
+    aioclient_mock.post(CLOUD, json=CLOUD_INFO)
+    data = hybrid_data()
+    data.update({CONF_LOCAL_ENABLED: False, CONF_LOCAL_ONLY: False})
+    await setup(hass, data)
+    st = hass.states.get("climate.myheat_temperatura_pomeshcheniia")
+    assert st is not None
+    assert set(st.attributes["preset_modes"]) == {"away", "eco", "home", "none", "sleep"}
+
+
+async def test_burner_entities_created(hass, aioclient_mock, caplog):
+    mock_local(aioclient_mock)
+    entry = await setup(hass, local_data())
+    flame = hass.states.get("binary_sensor.myheat_192_168_1_50_kotel_plamia")
+    runtime = hass.states.get("sensor.myheat_192_168_1_50_kotel_vremia_raboty_gorelki")
+    ignitions = hass.states.get("sensor.myheat_192_168_1_50_kotel_rozzhigi_gorelki")
+    assert flame is not None and runtime is not None and ignitions is not None
+    # no doubled device prefix in names / no config-entry title in entity_ids
+    assert flame.attributes["friendly_name"] == "MyHeat (192.168.1.50) Котел Пламя"
+    assert not [s.entity_id for s in hass.states.async_all() if "mock_title" in s.entity_id]
+    assert runtime.attributes["unit_of_measurement"] == "h"
+    assert runtime.attributes["state_class"] == "total_increasing"
+    assert float(runtime.state) == 0.0
+    assert ignitions.state == "0"
+    # attached to the boiler device, not a new orphan device
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    boiler = dev_reg.async_get(ent_reg.async_get(flame.entity_id).device_id)
+    assert boiler.name.endswith("Котел")
+    assert "is using state class" not in caplog.text  # device_class/state_class ok
+    assert entry.runtime_data.burner is not None
+
+
+async def test_no_burner_entities_in_cloud_only(hass, aioclient_mock):
+    aioclient_mock.post(CLOUD, json=CLOUD_INFO)
+    data = hybrid_data()
+    data.update({CONF_LOCAL_ENABLED: False, CONF_LOCAL_ONLY: False})
+    entry = await setup(hass, data)
+    assert entry.runtime_data.burner is None
+    assert not [s for s in hass.states.async_all() if "plamia" in s.entity_id]
+
+
+async def test_local_heater_return_and_target(hass, aioclient_mock):
+    """p101 is the return line (per the controller UI); target is not exposed locally."""
+    mock_local(aioclient_mock)
+    await setup(hass, local_data())
+    assert float(hass.states.get("sensor.myheat_192_168_1_50_kotel_podacha").state) == 57.5
+    assert float(hass.states.get("sensor.myheat_192_168_1_50_kotel_obratka").state) == 51.0
+    assert hass.states.get("sensor.myheat_192_168_1_50_kotel_tselevaia").state == "unknown"

@@ -27,6 +27,7 @@ CONF_LOCAL_PASSWORD = "local_password"
 CONF_LOCAL_PROTOCOL = "local_protocol"
 CONF_LOCAL_POLL_INTERVAL = "local_poll_interval"
 CONF_LOCAL_TIMEOUT = "local_timeout"
+CONF_BURNER_POLL_INTERVAL = "burner_poll_interval"
 
 # Stable per-device key used as basis for entity unique_id (survives entry re-create).
 # For cloud entries it equals str(device_id); for local-only entries — f"local_{serial}".
@@ -39,6 +40,7 @@ DEFAULT_LOCAL_PROTOCOL = "http"
 DEFAULT_LOCAL_POLL_INTERVAL = 30   # seconds; controller is slow, don't go below 15
 DEFAULT_CLOUD_POLL_INTERVAL = 30   # seconds
 DEFAULT_LOCAL_TIMEOUT = 30         # seconds per request
+DEFAULT_BURNER_POLL_INTERVAL = 15  # seconds; fast local burner tracking
 
 LOCAL_PROTOCOLS = ["http", "https"]
 

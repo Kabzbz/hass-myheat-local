@@ -70,6 +70,8 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
         # local-only sensors keep working when the active source is cloud.
         self._local_cache: dict | None = None
         self._local_cache_at: float = 0.0
+        # Fast local burner poller (burner.MhBurnerCoordinator), set in __init__.py
+        self.burner = None
         self._cloud_interval = timedelta(seconds=DEFAULT_CLOUD_POLL_INTERVAL)
         self._local_interval = timedelta(
             seconds=int(
@@ -110,6 +112,10 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
         self._local_cache = data["_local"]
         self._local_cache_at = time.monotonic()
         return data
+
+    def mark_local_stale(self) -> None:
+        """Make the next update re-read the controller (e.g. after a write)."""
+        self._local_cache_at = 0.0
 
     async def _refresh_local_cache_if_due(self) -> None:
         """Background-poll the local controller if the cache is stale.

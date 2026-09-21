@@ -20,7 +20,8 @@
           "local_password": "Локальный пароль",
           "local_protocol": "Протокол (http / https)",
           "local_poll_interval": "Интервал опроса в локальном режиме (сек)",
-          "local_timeout": "Тайм-аут запроса (сек)"
+          "local_timeout": "Тайм-аут запроса (сек)",
+          "burner_poll_interval": "Опрос горелки, сек (точный учёт времени работы)"
         }
       },
       "device": {
@@ -55,7 +56,8 @@
           "local_password": "Локальный пароль",
           "local_protocol": "Протокол (http / https)",
           "local_poll_interval": "Интервал опроса в локальном режиме (сек)",
-          "local_timeout": "Тайм-аут запроса (сек)"
+          "local_timeout": "Тайм-аут запроса (сек)",
+          "burner_poll_interval": "Опрос горелки, сек (точный учёт времени работы)"
         }
       }
     },

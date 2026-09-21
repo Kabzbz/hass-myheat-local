@@ -13,8 +13,10 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
 from .api import MhApiClient
+from .burner import MhBurnerCoordinator
 from .const import (
     CONF_API_KEY,
+    CONF_BURNER_POLL_INTERVAL,
     CONF_DEVICE_ID,
     CONF_DEVICE_KEY,
     CONF_LOCAL_ENABLED,
@@ -25,6 +27,7 @@ from .const import (
     CONF_LOCAL_PROTOCOL,
     CONF_LOCAL_TIMEOUT,
     CONF_USERNAME,
+    DEFAULT_BURNER_POLL_INTERVAL,
     DEFAULT_LOCAL_PROTOCOL,
     DEFAULT_LOCAL_TIMEOUT,
     DOMAIN,
@@ -102,6 +105,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: MhConfigEntry):
     )
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
+
+    if local_client is not None:
+        burner = MhBurnerCoordinator(
+            hass,
+            entry,
+            local_client,
+            int(entry.data.get(CONF_BURNER_POLL_INTERVAL, DEFAULT_BURNER_POLL_INTERVAL)),
+        )
+        # Plain refresh, not first_refresh: a controller hiccup must not block
+        # the whole integration (in hybrid mode the cloud still works).
+        await burner.async_refresh()
+        coordinator.burner = burner
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     # async_on_unload removes the listener on unload — otherwise every reload
