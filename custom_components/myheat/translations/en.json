@@ -27,6 +27,28 @@
       "already_configured": "Already configured"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Local connection settings",
+        "description": "Changed without removing the integration — history and entities are kept. The integration reloads after saving. Cloud login/API key cannot be changed here (that is a different account — add the integration again).",
+        "data": {
+          "local_enabled": "Use local connection (fallback)",
+          "local_only": "Local only (no cloud)",
+          "local_host": "Controller IP address or host",
+          "local_login": "Local login",
+          "local_password": "Local password",
+          "local_protocol": "Protocol (http / https)",
+          "local_poll_interval": "Local poll interval (s)",
+          "local_timeout": "Request timeout (s)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect_local": "Cannot reach the controller. Check IP, login and password.",
+      "cloud_creds_required": "This integration was added in local-only mode — there are no cloud credentials. To enable cloud, remove and re-add the integration with login and API key."
+    }
+  },
   "entity": {
     "sensor": {
       "active_source": {

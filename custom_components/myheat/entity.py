@@ -2,6 +2,7 @@
 
 import logging
 
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -74,7 +75,17 @@ class MhEntity(CoordinatorEntity[MhDataUpdateCoordinator]):
             })
 
         if self._mh_identifiers != self._mh_via_device:
-            info["via_device"] = self._mh_via_device
+            # via_device is deprecated in HA 2026.x → resolve to a device_id
+            # via the device registry and use via_device_id instead. If the
+            # parent device isn't yet registered (first-run race), we silently
+            # skip — HA will link them on the next reload.
+            try:
+                dev_reg = dr.async_get(self.hass)
+                parent = dev_reg.async_get_device(identifiers={self._mh_via_device})
+                if parent is not None:
+                    info["via_device_id"] = parent.id
+            except Exception:  # noqa: BLE001 — defensive, entity setup must not crash
+                pass
 
         return info
 

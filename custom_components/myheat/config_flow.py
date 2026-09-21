@@ -5,9 +5,12 @@ from typing import Any
 
 from homeassistant.config_entries import (
     CONN_CLASS_CLOUD_POLL,
+    ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
+    OptionsFlow,
 )
+from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 import voluptuous as vol
@@ -52,6 +55,12 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
         self._auth: dict[str, Any] = {}
         self._local: dict[str, Any] = {}
         self._devices: list[dict[str, Any]] = []
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Expose the CONFIGURE button next to the integration."""
+        return MhOptionsFlow()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -307,4 +316,122 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
             return True
         except (LocalApiError, ValueError):
             _LOGGER.exception("local controller probe failed")
+            return False
+
+
+class MhOptionsFlow(OptionsFlow):
+    """CONFIGURE button: change local-API settings without re-creating the entry.
+
+    Writes straight into entry.data (not entry.options) because the whole
+    integration reads its config from entry.data — then reloads the entry
+    so the coordinator picks up the new clients/intervals immediately.
+
+    Cloud credentials (login / api key / device) are intentionally NOT
+    editable here: changing them means a different account/device, which
+    is a new integration, not an option.
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        entry = self.config_entry
+        data = dict(entry.data)
+        has_cloud = bool(data.get(CONF_USERNAME)) and bool(data.get(CONF_API_KEY))
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            local_only = bool(user_input.get(CONF_LOCAL_ONLY))
+            local_enabled = local_only or bool(user_input.get(CONF_LOCAL_ENABLED))
+
+            if local_only is False and not has_cloud:
+                # Entry was created as local-only (no cloud creds) — can't
+                # switch to cloud/hybrid from here.
+                errors["base"] = "cloud_creds_required"
+            elif local_enabled:
+                ok = await self._probe_local(user_input)
+                if not ok:
+                    errors["base"] = "cannot_connect_local"
+
+            if not errors:
+                data.update(
+                    {
+                        CONF_LOCAL_ENABLED: local_enabled,
+                        CONF_LOCAL_ONLY: local_only,
+                        CONF_LOCAL_HOST: (user_input.get(CONF_LOCAL_HOST) or "").strip(),
+                        CONF_LOCAL_LOGIN: user_input.get(CONF_LOCAL_LOGIN, ""),
+                        CONF_LOCAL_PASSWORD: user_input.get(CONF_LOCAL_PASSWORD, ""),
+                        CONF_LOCAL_PROTOCOL: user_input.get(
+                            CONF_LOCAL_PROTOCOL, DEFAULT_LOCAL_PROTOCOL
+                        ),
+                        CONF_LOCAL_POLL_INTERVAL: int(
+                            user_input.get(
+                                CONF_LOCAL_POLL_INTERVAL, DEFAULT_LOCAL_POLL_INTERVAL
+                            )
+                        ),
+                        CONF_LOCAL_TIMEOUT: int(
+                            user_input.get(CONF_LOCAL_TIMEOUT, DEFAULT_LOCAL_TIMEOUT)
+                        ),
+                    }
+                )
+                # async_update_entry fires the entry's update listener, which
+                # reloads the integration — no explicit reload needed here.
+                self.hass.config_entries.async_update_entry(entry, data=data)
+                return self.async_create_entry(title="", data={})
+
+        current = user_input or data
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_LOCAL_ENABLED,
+                    default=bool(current.get(CONF_LOCAL_ENABLED, False)),
+                ): bool,
+                vol.Optional(
+                    CONF_LOCAL_ONLY,
+                    default=bool(current.get(CONF_LOCAL_ONLY, False)),
+                ): bool,
+                vol.Optional(
+                    CONF_LOCAL_HOST,
+                    default=current.get(CONF_LOCAL_HOST) or DEFAULT_LOCAL_HOST,
+                ): str,
+                vol.Optional(
+                    CONF_LOCAL_LOGIN,
+                    default=current.get(CONF_LOCAL_LOGIN) or DEFAULT_LOCAL_LOGIN,
+                ): str,
+                vol.Optional(
+                    CONF_LOCAL_PASSWORD,
+                    default=current.get(CONF_LOCAL_PASSWORD) or DEFAULT_LOCAL_PASSWORD,
+                ): str,
+                vol.Optional(
+                    CONF_LOCAL_PROTOCOL,
+                    default=current.get(CONF_LOCAL_PROTOCOL) or DEFAULT_LOCAL_PROTOCOL,
+                ): vol.In(LOCAL_PROTOCOLS),
+                vol.Optional(
+                    CONF_LOCAL_POLL_INTERVAL,
+                    default=int(
+                        current.get(CONF_LOCAL_POLL_INTERVAL) or DEFAULT_LOCAL_POLL_INTERVAL
+                    ),
+                ): vol.All(int, vol.Range(min=15, max=600)),
+                vol.Optional(
+                    CONF_LOCAL_TIMEOUT,
+                    default=int(current.get(CONF_LOCAL_TIMEOUT) or DEFAULT_LOCAL_TIMEOUT),
+                ): vol.All(int, vol.Range(min=10, max=120)),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
+
+    async def _probe_local(self, user_input: dict[str, Any]) -> bool:
+        try:
+            session = async_create_clientsession(self.hass)
+            client = MhLocalApiClient(
+                host=(user_input.get(CONF_LOCAL_HOST) or "").strip(),
+                login=user_input.get(CONF_LOCAL_LOGIN, ""),
+                password=user_input.get(CONF_LOCAL_PASSWORD, ""),
+                session=session,
+                protocol=user_input.get(CONF_LOCAL_PROTOCOL, DEFAULT_LOCAL_PROTOCOL),
+                timeout=int(user_input.get(CONF_LOCAL_TIMEOUT, DEFAULT_LOCAL_TIMEOUT)),
+            )
+            await client.async_login()
+            return True
+        except (LocalApiError, ValueError):
+            _LOGGER.exception("local controller probe failed (options flow)")
             return False

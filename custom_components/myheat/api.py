@@ -20,14 +20,32 @@ ENV_TYPE_CIRCUIT_TEMPERATURE = "circuit_temperature"
 ENV_TYPE_BOILER_TEMPERATURE = "boiler_temperature"
 ENV_TYPE_DHW_TEMPERATURE = "dhw_temperature"
 ENV_TYPE_FLOOR_TEMPERATURE = "floor_temperature"  # added in upstream 0.8.0
+ENV_TYPE_HUMIDITY = "humidity"  # added in upstream 0.10.0
 
-# Env types that should be exposed as Climate entities (vs. Water Heater).
-CLIMATE_ENV_TYPES = (
+# Env types that carry temperature values (used to pick the right sensor
+# device_class / unit for MhEnvSensor).
+TEMPERATURE_ENV_TYPES = frozenset({
+    ENV_TYPE_ROOM_TEMPERATURE,
+    ENV_TYPE_CIRCUIT_TEMPERATURE,
+    ENV_TYPE_BOILER_TEMPERATURE,
+    ENV_TYPE_DHW_TEMPERATURE,
+    ENV_TYPE_FLOOR_TEMPERATURE,
+    "temperature",
+})
+
+# Env types that should be exposed as Climate entities (vs. Water Heater / Sensor).
+CLIMATE_ENV_TYPES = frozenset({
     ENV_TYPE_ROOM_TEMPERATURE,
     ENV_TYPE_CIRCUIT_TEMPERATURE,
     ENV_TYPE_FLOOR_TEMPERATURE,
     "temperature",
-)
+})
+
+# Env types that should be exposed as Water Heater entities.
+WATER_HEATER_ENV_TYPES = frozenset({
+    ENV_TYPE_BOILER_TEMPERATURE,
+    ENV_TYPE_DHW_TEMPERATURE,
+})
 
 HEADERS = {
     "Content-Type": "application/json; charset=UTF-8",

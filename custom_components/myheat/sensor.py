@@ -3,10 +3,16 @@
 from itertools import chain
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.const import UnitOfTemperature, UnitOfPressure
+from homeassistant.const import PERCENTAGE, UnitOfPressure, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .api import (
+    CLIMATE_ENV_TYPES,
+    ENV_TYPE_HUMIDITY,
+    TEMPERATURE_ENV_TYPES,
+    WATER_HEATER_ENV_TYPES,
+)
 from .const import SOURCE_CLOUD, SOURCE_LOCAL, SOURCE_OFFLINE
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
 from .entity import MhEntity, MhHeaterEntity, MhEnvEntity, MhEngEntity
@@ -55,10 +61,14 @@ async def async_setup_entry(
             MhEngStateSensor(coordinator, entry, eng)
             for eng in coordinator.data.get("engs", [])
         ),
+        # Non-controllable envs: humidity, unknown numeric zone values.
+        # Anything not climate-controllable AND not a water-heater target
+        # → expose as a plain sensor (porting upstream PR #251 v0.11.0).
         (
-            MhAdditionalTempSensor(coordinator, entry, env)
+            MhEnvSensor(coordinator, entry, env)
             for env in coordinator.data.get("envs", [])
-            if env.get("type") not in ["room_temperature", "circuit_temperature", "boiler_temperature", "temperature"]
+            if env.get("type") not in CLIMATE_ENV_TYPES
+            and env.get("type") not in WATER_HEATER_ENV_TYPES
             and isinstance(env.get("value"), (int, float))
         ),
     )
@@ -450,4 +460,50 @@ class MhCurrentModeSensor(MhEntity, SensorEntity):
             "доступные_расписания": [
                 s.get("n") for s in (local.get("scheds") or [])
             ],
+        }
+
+
+class MhEnvSensor(MhEnvEntity, SensorEntity):
+    """Sensor for environment values that cannot be controlled.
+
+    Env types that are neither climate nor water heater (humidity, outdoor
+    temperature, arbitrary numeric zone values) are exposed as plain sensors.
+    Ported from vooon upstream v0.11.0 (PR #251).
+
+    Automatically picks the right device_class / unit based on env.type:
+    - "humidity" → HUMIDITY / %
+    - any temperature type → TEMPERATURE / °C
+    - unknown → no device_class, no unit
+    """
+
+    def __init__(
+        self,
+        coordinator,
+        config_entry,
+        env: dict,
+    ):
+        super().__init__(coordinator, config_entry, env)
+
+        env_type = env.get("type")
+        if env_type == ENV_TYPE_HUMIDITY:
+            self._attr_device_class = SensorDeviceClass.HUMIDITY
+            self._attr_native_unit_of_measurement = PERCENTAGE
+            self._attr_icon = "mdi:water-percent"
+        elif env_type in TEMPERATURE_ENV_TYPES:
+            self._attr_device_class = SensorDeviceClass.TEMPERATURE
+            self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+            self._attr_icon = "mdi:thermometer"
+
+    @property
+    def native_value(self) -> float | None:
+        return self.get_env().get("value")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        env = self.get_env()
+        return {
+            "env_type": env.get("type", ""),
+            "env_id": self.env_id,
+            "severity": env.get("severity", 0),
+            "severity_desc": env.get("severityDesc", ""),
         }

@@ -104,7 +104,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: MhConfigEntry):
     entry.runtime_data = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.add_update_listener(async_reload_entry)
+    # async_on_unload removes the listener on unload — otherwise every reload
+    # stacks one more listener and a single options change reloads N times.
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
 
 
@@ -114,9 +116,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: MhConfigEntry) -> bool:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: MhConfigEntry) -> None:
-    """Reload config entry."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    """Reload config entry through HA's machinery (fires async_on_unload callbacks)."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: MhConfigEntry) -> bool:
