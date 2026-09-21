@@ -561,7 +561,8 @@ async def test_water_heater_shows_setpoint_not_range(hass, aioclient_mock):
     assert dhw.attributes["target_temp_high"] is None
     assert dhw.attributes["target_temp_low"] is None
     assert dhw.attributes["temperature"] == 50            # cloud target in the fixture
-    assert (dhw.attributes["min_temp"], dhw.attributes["max_temp"]) == (7, 85)
+    # hybrid: allowed range comes from the controller (s.p3012 / s.p3011)
+    assert (dhw.attributes["min_temp"], dhw.attributes["max_temp"]) == (40, 65)
 
 
 async def test_local_heater_return_and_target(hass, aioclient_mock):

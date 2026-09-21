@@ -120,6 +120,10 @@ class MhEnvWaterHeater(MhEnvEntity, WaterHeaterEntity):
         e = self.get_env()
         if not e:
             return
+        limits = self.controller_goal_limits()
+        if limits:
+            # the controller's real range (e.g. 40–65 °C) instead of 7–85
+            self._attr_min_temp, self._attr_max_temp = limits
         target = e.get("target")
         self._attr_current_temperature = e.get("value")
         self._attr_target_temperature = target or 0.0

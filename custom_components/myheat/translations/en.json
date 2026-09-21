@@ -31,16 +31,26 @@
           "local_timeout": "Request timeout (s)",
           "burner_poll_interval": "Burner poll interval, s (accurate run time)"
         }
+      },
+      "reauth_confirm": {
+        "title": "New MyHeat API key",
+        "description": "The MyHeat cloud no longer accepts the key. Enter your login and a new API key (my.myheat.net → Settings → Profile). History and entities are kept.",
+        "data": {
+          "username": "MyHeat login (e-mail)",
+          "api_key": "API key"
+        }
       }
     },
     "error": {
       "cannot_connect": "Connection error",
       "invalid_auth": "Auth error",
       "unknown": "Unknown error",
-      "cannot_connect_local": "Cannot reach the controller. Check IP, login and password."
+      "cannot_connect_local": "Cannot reach the controller. Check IP, login and password.",
+      "device_not_found": "No controller of this integration was found for this key — check the account."
     },
     "abort": {
-      "already_configured": "Already configured"
+      "already_configured": "Already configured",
+      "reauth_successful": "Key updated, integration reloaded."
     }
   },
   "options": {
@@ -57,7 +67,8 @@
           "local_protocol": "Protocol (http / https)",
           "local_poll_interval": "Local poll interval (s)",
           "local_timeout": "Request timeout (s)",
-          "burner_poll_interval": "Burner poll interval, s (accurate run time)"
+          "burner_poll_interval": "Burner poll interval, s (accurate run time)",
+          "gas_rate": "Gas use while the burner runs, m³/h (0 = no gas estimate)"
         }
       }
     },

@@ -48,6 +48,7 @@ HEATER_FLAG_PUMP = 0x0004
 HEATER_FLAG_CH = 0x0008
 HEATER_FLAG_DHW = 0x0010
 HEATER_FLAG_LINK = 0x0020
+HEATER_FLAG_LOW_PRESSURE = 0x0400  # web UI: "Низкое давление в контуре отопления"
 
 
 class LocalApiError(Exception):
@@ -329,6 +330,15 @@ def translate_local_to_cloud(
     severity = int(obj.get("deviceSeverity") or 0)
     inet_up = str(state.get("inet") or "0") == "1"
 
+    # Allowed goal range per env, exactly as the controller's web UI does:
+    # goalMin = settings p3012, goalMax = settings p3011.
+    env_limits: dict[Any, tuple[float, float]] = {}
+    for e in obj.get("envs", []) or []:
+        settings = e.get("s") or {}
+        lo, hi = _safe_float(settings.get("p3012")), _safe_float(settings.get("p3011"))
+        if lo is not None and hi is not None and lo < hi:
+            env_limits[e.get("i")] = (lo, hi)
+
     return {
         "heaters": heaters,
         "envs": envs,
@@ -354,5 +364,6 @@ def translate_local_to_cloud(
             "deviceFlags": obj.get("deviceFlags"),
             "simSignal": obj.get("simSignal"),
             "simBalance": obj.get("simBalance"),
+            "env_limits": env_limits,
         },
     }

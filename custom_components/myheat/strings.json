@@ -31,16 +31,26 @@
           "name": "[%key:common::config_flow::data::name%]",
           "device_id": "[%key:common::config_flow::data::device_id%]"
         }
+      },
+      "reauth_confirm": {
+        "title": "Новый API-ключ MyHeat",
+        "description": "Облако MyHeat перестало принимать ключ. Введите логин и новый API-ключ (my.myheat.net → Настройки → Профиль). История и сущности сохранятся.",
+        "data": {
+          "username": "Логин MyHeat (e-mail)",
+          "api_key": "Ключ API"
+        }
       }
     },
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
       "cannot_connect_local": "Не удалось достучаться до контроллера. Проверьте IP, login и password.",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "unknown": "[%key:common::config_flow::error::unknown%]",
+      "device_not_found": "С этим ключом не найден контроллер этой интеграции — проверьте аккаунт."
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
+      "reauth_successful": "Ключ обновлён, интеграция перезапущена."
     }
   },
   "options": {
@@ -57,7 +67,8 @@
           "local_protocol": "Протокол (http / https)",
           "local_poll_interval": "Интервал опроса в локальном режиме (сек)",
           "local_timeout": "Тайм-аут запроса (сек)",
-          "burner_poll_interval": "Опрос горелки, сек (точный учёт времени работы)"
+          "burner_poll_interval": "Опрос горелки, сек (точный учёт времени работы)",
+          "gas_rate": "Расход газа при работе горелки, м³/ч (0 — не считать газ)"
         }
       }
     },

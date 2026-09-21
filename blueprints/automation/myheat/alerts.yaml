@@ -1,0 +1,120 @@
+blueprint:
+  name: MyHeat — тревоги котла
+  description: >-
+    Уведомляет, когда котёл сообщает об ошибке, падает давление, контроллер
+    теряет связь с котлом, MyHeat перестаёт отвечать (ни облако, ни контроллер)
+    или баланс SIM опускается ниже порога. Для интеграции MyHeat (local + cloud,
+    RU) с включённым локальным подключением. Уведомление всегда появляется в HA;
+    отправку на телефон можно добавить в последнем поле.
+  domain: automation
+  source_url: https://github.com/Kabzbz/hass-myheat-local/blob/main/blueprints/automation/myheat/alerts.yaml
+  input:
+    fault_sensor:
+      name: Ошибка котла
+      selector:
+        entity:
+          filter:
+            - integration: myheat
+              domain: binary_sensor
+    pressure_sensor:
+      name: Низкое давление
+      selector:
+        entity:
+          filter:
+            - integration: myheat
+              domain: binary_sensor
+    link_sensor:
+      name: Связь с котлом
+      selector:
+        entity:
+          filter:
+            - integration: myheat
+              domain: binary_sensor
+    source_sensor:
+      name: Источник данных
+      selector:
+        entity:
+          filter:
+            - integration: myheat
+              domain: sensor
+    offline_minutes:
+      name: Считать, что MyHeat не отвечает, через (мин)
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 120
+          unit_of_measurement: мин
+    sim_sensor:
+      name: Баланс SIM
+      selector:
+        entity:
+          filter:
+            - integration: myheat
+              domain: sensor
+    sim_threshold:
+      name: Предупреждать, когда баланс SIM ниже (₽)
+      default: 0
+      selector:
+        number:
+          min: -1000
+          max: 10000
+          step: 1
+          mode: box
+    notify_action:
+      name: Дополнительно уведомить (необязательно)
+      description: >-
+        Например, «Уведомления → Отправить уведомление через mobile_app_…».
+        Текст тревоги доступен в шаблоне как {{ message }}.
+      default: []
+      selector:
+        action: {}
+
+mode: queued
+max: 10
+
+triggers:
+  - trigger: state
+    entity_id: !input fault_sensor
+    to: "on"
+    id: fault
+  - trigger: state
+    entity_id: !input pressure_sensor
+    to: "on"
+    id: pressure
+  - trigger: state
+    entity_id: !input link_sensor
+    to: "off"
+    for:
+      minutes: 2
+    id: link
+  - trigger: state
+    entity_id: !input source_sensor
+    to: offline
+    for:
+      minutes: !input offline_minutes
+    id: offline
+  - trigger: numeric_state
+    entity_id: !input sim_sensor
+    below: !input sim_threshold
+    id: sim
+
+variables:
+  sim_entity: !input sim_sensor
+
+actions:
+  - variables:
+      message: >-
+        {% if trigger.id == 'fault' %}Котёл сообщает об ошибке.
+        {%- elif trigger.id == 'pressure' %}Низкое давление в контуре отопления.
+        {%- elif trigger.id == 'link' %}Контроллер MyHeat потерял связь с котлом.
+        {%- elif trigger.id == 'offline' %}MyHeat не отвечает: нет данных ни из облака, ни с контроллера.
+        {%- elif trigger.id == 'sim' %}Баланс SIM MyHeat: {{ states(sim_entity) }} ₽ — пора пополнить.
+        {%- endif %}
+  - action: persistent_notification.create
+    data:
+      title: MyHeat
+      message: "{{ message }}"
+      notification_id: "myheat_{{ trigger.id }}"
+  - choose: []
+    default: !input notify_action

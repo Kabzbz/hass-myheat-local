@@ -18,6 +18,7 @@ from .api import MhApiClient
 from .const import (
     CONF_API_KEY,
     CONF_BURNER_POLL_INTERVAL,
+    CONF_GAS_RATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_KEY,
     CONF_LOCAL_ENABLED,
@@ -62,6 +63,44 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         """Expose the CONFIGURE button next to the integration."""
         return MhOptionsFlow()
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
+        """Started by the coordinator when the cloud keeps refusing the key."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            username = (user_input.get(CONF_USERNAME) or "").strip()
+            api_key = (user_input.get(CONF_API_KEY) or "").strip()
+            devices = (
+                await self._get_devices(username=username, api_key=api_key)
+                if username and api_key
+                else []
+            )
+            if not devices:
+                errors["base"] = "invalid_auth"
+            elif not any(d.get("id") == entry.data.get(CONF_DEVICE_ID) for d in devices):
+                errors["base"] = "device_not_found"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data={**entry.data, CONF_USERNAME: username, CONF_API_KEY: api_key},
+                )
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_USERNAME, default=entry.data.get(CONF_USERNAME, "")
+                ): str,
+                vol.Required(CONF_API_KEY): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reauth_confirm", data_schema=schema, errors=errors
+        )
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -385,6 +424,7 @@ class MhOptionsFlow(OptionsFlow):
                                 CONF_BURNER_POLL_INTERVAL, DEFAULT_BURNER_POLL_INTERVAL
                             )
                         ),
+                        CONF_GAS_RATE: float(user_input.get(CONF_GAS_RATE) or 0),
                     }
                 )
                 # async_update_entry fires the entry's update listener, which
@@ -436,6 +476,10 @@ class MhOptionsFlow(OptionsFlow):
                         or DEFAULT_BURNER_POLL_INTERVAL
                     ),
                 ): vol.All(int, vol.Range(min=5, max=300)),
+                vol.Optional(
+                    CONF_GAS_RATE,
+                    default=float(current.get(CONF_GAS_RATE) or 0),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=20)),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

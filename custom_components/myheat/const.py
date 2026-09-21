@@ -10,7 +10,7 @@ from homeassistant.const import Platform
 NAME = "MyHeat.net"
 DOMAIN = "myheat"
 DOMAIN_DATA = f"{DOMAIN}_data"
-VERSION = "10.02"
+VERSION = "10.03"
 
 ATTRIBUTION = "https://myheat.net"
 MANUFACTURER = "https://myheat.net"
@@ -28,6 +28,7 @@ CONF_LOCAL_PROTOCOL = "local_protocol"
 CONF_LOCAL_POLL_INTERVAL = "local_poll_interval"
 CONF_LOCAL_TIMEOUT = "local_timeout"
 CONF_BURNER_POLL_INTERVAL = "burner_poll_interval"
+CONF_GAS_RATE = "gas_rate"  # m³/h while the burner runs; 0 = no gas estimate
 
 # Stable per-device key used as basis for entity unique_id (survives entry re-create).
 # For cloud entries it equals str(device_id); for local-only entries — f"local_{serial}".

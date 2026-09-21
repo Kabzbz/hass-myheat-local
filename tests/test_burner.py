@@ -24,10 +24,13 @@ ON = DHW_BURNING
 def test_real_flag_values_decode():
     assert decode_heater_flags(IDLE) == {
         "link": True, "fault": False, "flame": False, "pump": False, "ch": False, "dhw": False,
+        "low_pressure": False,
     }
     assert decode_heater_flags(DHW_BURNING) == {
         "link": True, "fault": False, "flame": True, "pump": True, "ch": False, "dhw": True,
+        "low_pressure": False,
     }
+    assert decode_heater_flags(IDLE | 0x0400)["low_pressure"] is True
     assert decode_heater_flags(PUMP_OVERRUN)["flame"] is False
     assert decode_heater_flags(PUMP_OVERRUN)["pump"] is True
     ch = decode_heater_flags(CH_BURNING)

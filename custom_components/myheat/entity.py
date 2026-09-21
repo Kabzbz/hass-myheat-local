@@ -249,6 +249,16 @@ class MhEnvEntity(MhEntity):
             })
         return attrs
 
+    def controller_goal_limits(self) -> tuple[float, float] | None:
+        """Allowed goal range from the controller itself, if known.
+
+        Comes from the local API (also cached in hybrid mode while the cloud
+        is the source); the cloud does not report it.
+        """
+        local = (self.coordinator.data or {}).get("_local") or {}
+        limits = (local.get("env_limits") or {}).get(self.env_id)
+        return tuple(limits) if limits else None
+
     def get_env(self) -> dict:
         """Return env state data"""
         if not self.coordinator.data or not self.coordinator.data.get("dataActual", False):

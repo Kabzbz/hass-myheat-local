@@ -30,7 +30,7 @@ from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfTime
+from homeassistant.const import UnitOfTime, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import (
@@ -40,13 +40,14 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_NAME, DEFAULT_NAME, DOMAIN, MANUFACTURER, VERSION
+from .const import CONF_GAS_RATE, CONF_NAME, DEFAULT_NAME, DOMAIN, MANUFACTURER, VERSION
 from .local_api import (  # noqa: F401 — flag constants re-exported for tests
     HEATER_FLAG_CH,
     HEATER_FLAG_DHW,
     HEATER_FLAG_FAULT,
     HEATER_FLAG_FLAME,
     HEATER_FLAG_LINK,
+    HEATER_FLAG_LOW_PRESSURE,
     HEATER_FLAG_PUMP,
     LocalApiError,
     MhLocalApiClient,
@@ -67,6 +68,7 @@ def decode_heater_flags(flags: int) -> dict[str, bool]:
         "pump": bool(flags & HEATER_FLAG_PUMP),
         "ch": bool(flags & HEATER_FLAG_CH),
         "dhw": bool(flags & HEATER_FLAG_DHW),
+        "low_pressure": bool(flags & HEATER_FLAG_LOW_PRESSURE),
     }
 
 
@@ -105,6 +107,18 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._overrun_after = ""
         self._overrun_seq = 0
         self._last_overrun: dict[str, Any] | None = None
+        # last full /api/getObjState answer, shared with the main coordinator
+        # so the controller is not asked for the same data twice
+        self.last_obj: dict[str, Any] | None = None
+        self.last_obj_at: float = 0.0
+
+    def fresh_obj_state(self) -> dict[str, Any] | None:
+        """The last getObjState answer if it is at most two poll steps old."""
+        if self.last_obj is None:
+            return None
+        if time.monotonic() - self.last_obj_at > self._interval * 2:
+            return None
+        return self.last_obj
 
     @property
     def interval_seconds(self) -> int:
@@ -156,6 +170,7 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"burner poll: {err}") from err
 
         now = time.monotonic()
+        self.last_obj, self.last_obj_at = obj, now
         heaters = obj.get("heaters") or []
         flags = int((heaters[0] if heaters else {}).get("f") or 0)
         state = decode_heater_flags(flags)
@@ -206,24 +221,32 @@ def _burner_entities(coordinator, entry, device_key: str, classes) -> list:
 
 def burner_counter_sensors(coordinator, entry, device_key: str) -> list:
     """Sensor-platform entities of the fast local poller (local API only)."""
+    classes = [
+        MhBurnerRuntimeSensor,
+        MhBurnerChRuntimeSensor,
+        MhBurnerDhwRuntimeSensor,
+        MhBurnerIgnitionsSensor,
+        MhDhwStartsSensor,
+        MhPumpOverrunSensor,
+    ]
+    if float(entry.data.get(CONF_GAS_RATE) or 0) > 0:
+        classes += [MhGasTotalSensor, MhGasChSensor, MhGasDhwSensor]
+    return _burner_entities(coordinator, entry, device_key, classes)
+
+
+def burner_binary_sensors(coordinator, entry, device_key: str) -> list:
+    """Binary-sensor-platform entities of the fast local poller."""
     return _burner_entities(
         coordinator,
         entry,
         device_key,
         (
-            MhBurnerRuntimeSensor,
-            MhBurnerChRuntimeSensor,
-            MhBurnerDhwRuntimeSensor,
-            MhBurnerIgnitionsSensor,
-            MhDhwStartsSensor,
-            MhPumpOverrunSensor,
+            MhPumpBinarySensor,
+            MhBoilerFaultBinarySensor,
+            MhLowPressureBinarySensor,
+            MhBoilerLinkBinarySensor,
         ),
     )
-
-
-def burner_binary_sensors(coordinator, entry, device_key: str) -> list:
-    """Binary-sensor-platform entities of the fast local poller."""
-    return _burner_entities(coordinator, entry, device_key, (MhPumpBinarySensor,))
 
 
 class _MhBurnerEntity(CoordinatorEntity[MhBurnerCoordinator]):
@@ -239,6 +262,7 @@ class _MhBurnerEntity(CoordinatorEntity[MhBurnerCoordinator]):
 
     def __init__(self, coordinator, entry, heater: dict, device_key: str) -> None:
         super().__init__(coordinator)
+        self._entry = entry
         base = entry.data.get(CONF_NAME, DEFAULT_NAME)
         self._attr_name = f"{base} {heater['name']} {self._label}"
         self._attr_unique_id = f"{device_key}htr{heater['id']}{self._key}"
@@ -411,3 +435,75 @@ class MhPumpOverrunSensor(_MhBurnerEntity, RestoreSensor):
             "закончился": self._ended,
             "точность": f"±{self.coordinator.interval_seconds} с",
         }
+
+
+class _MhFlagBinarySensor(_MhBurnerEntity, BinarySensorEntity):
+    """A heater flag bit from the fast local poller."""
+
+    _flag_key = ""
+
+    @property
+    def is_on(self) -> bool | None:
+        data = self.coordinator.data
+        return None if data is None else bool(data.get(self._flag_key))
+
+
+class MhBoilerFaultBinarySensor(_MhFlagBinarySensor):
+    """Boiler reports an error (web UI: "Ошибка на котле")."""
+
+    _key = "local_fault"
+    _label = "Ошибка котла"
+    _flag_key = "fault"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:alert-circle"
+
+
+class MhLowPressureBinarySensor(_MhFlagBinarySensor):
+    """Web UI: "Низкое давление в контуре отопления"."""
+
+    _key = "local_low_pressure"
+    _label = "Низкое давление"
+    _flag_key = "low_pressure"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:gauge-low"
+
+
+class MhBoilerLinkBinarySensor(_MhFlagBinarySensor):
+    """Controller <-> boiler link (web UI shows "Нет связи с котлом" when off)."""
+
+    _key = "local_link"
+    _label = "Связь с котлом"
+    _flag_key = "link"
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+
+
+class MhGasTotalSensor(MhBurnerRuntimeSensor):
+    """Gas estimate for the Energy dashboard: burner hours × configured rate.
+
+    The rate (m³/h while the burner runs) is set in the integration options;
+    changing it applies from then on, the accumulated total is kept.
+    """
+
+    _key = "gas_total"
+    _label = "Газ (оценка)"
+    _attr_icon = "mdi:fire"
+    _attr_device_class = SensorDeviceClass.GAS
+    _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
+    _attr_suggested_display_precision = 3
+    _delta_key = "on_seconds"
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        self._scale = float(self._entry.data.get(CONF_GAS_RATE) or 0) / 3600
+
+
+class MhGasChSensor(MhGasTotalSensor):
+    _key = "gas_ch"
+    _label = "Газ на отопление (оценка)"
+    _delta_key = "ch_seconds"
+
+
+class MhGasDhwSensor(MhGasTotalSensor):
+    _key = "gas_dhw"
+    _label = "Газ на ГВС (оценка)"
+    _delta_key = "dhw_seconds"

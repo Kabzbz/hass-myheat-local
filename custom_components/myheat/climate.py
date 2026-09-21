@@ -219,7 +219,10 @@ class MhEnvClimate(MhEnvEntity, ClimateEntity):
     def _update_from_data(self) -> None:
         e = self.get_env()
         if e:
-            self._attr_min_temp, self._attr_max_temp = _temp_limits(e)
+            # The controller's own goal range wins; type-based rules otherwise.
+            self._attr_min_temp, self._attr_max_temp = (
+                self.controller_goal_limits() or _temp_limits(e)
+            )
             self._attr_current_temperature = e.get("value")
             self._attr_target_temperature = e.get("target")
             self._attr_hvac_action = (
