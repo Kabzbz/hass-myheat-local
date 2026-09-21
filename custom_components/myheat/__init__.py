@@ -2,7 +2,7 @@
 Custom integration to integrate MyHeat with Home Assistant.
 
 For more details about this integration, please refer to
-https://github.com/vooon/hass-myheat
+https://github.com/Kabzbz/hass-myheat-local (fork of https://github.com/vooon/hass-myheat)
 """
 
 import logging

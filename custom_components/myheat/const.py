@@ -15,7 +15,7 @@ VERSION = "10.01"
 ATTRIBUTION = "https://myheat.net"
 MANUFACTURER = "https://myheat.net"
 
-ISSUE_URL = "https://github.com/vooon/hass-myheat/issues"
+ISSUE_URL = "https://github.com/Kabzbz/hass-myheat-local/issues"
 
 
 # Local API config keys
