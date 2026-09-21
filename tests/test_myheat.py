@@ -44,12 +44,17 @@ LOCAL_OBJ = {
          "st": {"p1": 22.9375, "p4": 0}, "s": {"p3001": "heating_circuit"}},
         {"n": "Температура батареи обратка ", "i": 70, "t": 112, "f": 0, "sev": 1,
          "st": {"p1": 41.9375, "p4": 0}, "s": {"p3001": "heating_circuit"}},
+        # st/s values as on the real controller: goal lives in s.p3008,
+        # st.p4 is a 0/1 flag; DHW has no temperature probe.
         {"n": "Контур ГВС", "i": 47, "t": 103, "f": 0, "sev": 0,
-         "st": {"p1": -16777216, "p4": 1}, "s": {"p3001": "dhw_circuit"}},
+         "st": {"p1": -16777216, "p4": 1},
+         "s": {"p3001": "dhw_circuit", "p3008": "60", "p3011": "65", "p3012": "40"}},
         {"n": "Температура помещения", "i": 48, "t": 101, "f": 128, "sev": 1,
-         "st": {"p1": 22.575, "p4": 22.5}, "s": {"p3001": "heating_circuit"}},
+         "st": {"p1": 22.575, "p4": 1},
+         "s": {"p3001": "heating_circuit", "p3008": "22.5", "p3011": "30", "p3012": "10"}},
         {"n": "Контур отопления", "i": 46, "t": 102, "f": 0, "sev": 1,
-         "st": {"p1": 57.5, "p4": 0}, "s": {"p3001": "heating_circuit"}},
+         "st": {"p1": 57.5, "p4": 0},
+         "s": {"p3001": "heating_circuit", "p3008": "-16777216", "p3022": "-16777216"}},
     ],
     "engs": [{"n": "Клапан 3-ходовой", "i": 71, "t": 308, "f": 0, "sev": 1,
               "st": {"p1": -16777216, "p4": 0}, "s": {}}],
@@ -532,6 +537,31 @@ async def test_no_burner_entities_in_cloud_only(hass, aioclient_mock):
     assert entry.runtime_data.burner is None
     assert not [s for s in hass.states.async_all() if "vremia_raboty" in s.entity_id]
     assert states_by_name(hass)["myheat Котел Горелка"].attributes["источник"] == "облако"
+
+
+async def test_local_env_targets_from_settings(hass, aioclient_mock):
+    """Local goal = s.p3008 (per the controller UI), not st.p4."""
+    mock_local(aioclient_mock)
+    await setup(hass, local_data())
+    room = hass.states.get("climate.myheat_192_168_1_50_temperatura_pomeshcheniia")
+    assert room.attributes["temperature"] == 22.5 and room.state == "heat"
+    circuit = hass.states.get("climate.myheat_192_168_1_50_kontur_otopleniia")
+    assert circuit.attributes["temperature"] is None and circuit.state == "off"
+    dhw = hass.states.get("water_heater.myheat_192_168_1_50_kontur_gvs")
+    assert dhw.attributes["temperature"] == 60
+    assert dhw.attributes["current_temperature"] is None     # no DHW probe, not 0 °C
+
+
+async def test_water_heater_shows_setpoint_not_range(hass, aioclient_mock):
+    """target_temp_high/low must be empty, otherwise HA shows '7–85 °C'."""
+    mock_local(aioclient_mock)
+    aioclient_mock.post(CLOUD, json=CLOUD_INFO)
+    await setup(hass, hybrid_data())
+    dhw = [s for s in hass.states.async_all() if s.entity_id.startswith("water_heater.")][0]
+    assert dhw.attributes["target_temp_high"] is None
+    assert dhw.attributes["target_temp_low"] is None
+    assert dhw.attributes["temperature"] == 50            # cloud target in the fixture
+    assert (dhw.attributes["min_temp"], dhw.attributes["max_temp"]) == (7, 85)
 
 
 async def test_local_heater_return_and_target(hass, aioclient_mock):

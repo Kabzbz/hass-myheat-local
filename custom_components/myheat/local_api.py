@@ -289,13 +289,19 @@ def translate_local_to_cloud(
     envs: list[dict[str, Any]] = []
     for e in obj.get("envs", []) or []:
         st = e.get("st") or {}
+        settings = e.get("s") or {}
         envs.append(
             {
                 "id": e.get("i"),
                 "type": _env_type(e),
                 "name": (e.get("n") or "").strip(),
-                "value": _safe_float(st.get("p1")) or 0.0,
-                "target": _safe_float(st.get("p4")),
+                # None when the env has no sensor (e.g. DHW without a probe),
+                # not 0 °C.
+                "value": _safe_float(st.get("p1")),
+                # The controller's web UI takes the goal from settings p3008
+                # (sentinel = no manual goal, e.g. heating by curve). st.p4 is
+                # a 0/1 flag, not a temperature.
+                "target": _safe_float(settings.get("p3008")),
                 "demand": bool(int(e.get("f") or 0) & 0x80),
                 "severity": int(e.get("sev") or 0),
                 "severityDesc": "",

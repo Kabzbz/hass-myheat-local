@@ -47,8 +47,9 @@ class MhEnvWaterHeater(MhEnvEntity, WaterHeaterEntity):
     # under entity.water_heater.dhw.state.* (and ...state_attributes.operation.state.*)
     _attr_translation_key = "dhw"
 
-    _attr_target_temperature_high = 85.0
-    _attr_target_temperature_low = 7.0
+    # No target_temperature_high/low: those describe a target *range*, and HA
+    # then shows "7–85 °C" instead of the real setpoint. The allowed limits
+    # are min_temp / max_temp.
     _attr_target_temperature_step = 0.5
     _attr_max_temp = 85.0
     _attr_min_temp = 7.0
