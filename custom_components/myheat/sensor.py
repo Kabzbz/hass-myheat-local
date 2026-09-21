@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .api import ENV_TYPE_HUMIDITY
-from .burner import burner_entities_for
+from .burner import burner_counter_sensors
 from .const import SOURCE_CLOUD, SOURCE_LOCAL, SOURCE_OFFLINE
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
 from .entity import MhEntity, MhHeaterEntity, MhEnvEntity, MhEngEntity, stable_device_key
@@ -66,7 +66,7 @@ async def async_setup_entry(
             and isinstance(env.get("value"), (int, float))
         ),
         # after the heater entities, so the boiler device already exists
-        burner_entities_for(coordinator, entry, stable_device_key(entry), "sensor"),
+        burner_counter_sensors(coordinator, entry, stable_device_key(entry)),
     )
 
     async_add_entities(entities)

@@ -21,10 +21,6 @@ import logging
 import time
 from typing import Any
 
-from homeassistant.components.binary_sensor import (
-    BinarySensorDeviceClass,
-    BinarySensorEntity,
-)
 from homeassistant.components.sensor import (
     RestoreSensor,
     SensorDeviceClass,
@@ -95,14 +91,16 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._local = local_client
         self._interval = interval_seconds
         self._prev_t: float | None = None
-        self._prev_on: bool | None = None
+        # previous (flame, flame-for-heating, flame-for-hot-water); None = unknown
+        self._prev: tuple[bool, bool, bool] | None = None
+        self._seq = 0
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             obj = await self._local.async_get_obj_state()
         except LocalApiError as err:
-            # Don't integrate across the gap; keep _prev_on to still detect
-            # an ignition that happened while the controller was silent.
+            # Don't integrate across the gap; keep _prev to still detect an
+            # ignition that happened while the controller was silent.
             self._prev_t = None
             raise UpdateFailed(f"burner poll: {err}") from err
 
@@ -110,40 +108,53 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         heaters = obj.get("heaters") or []
         flags = int((heaters[0] if heaters else {}).get("f") or 0)
         state = decode_heater_flags(flags)
-        on = state["flame"]
+        cur = (
+            state["flame"],
+            state["flame"] and state["ch"],
+            state["flame"] and state["dhw"],
+        )
 
-        on_seconds = 0.0
-        ignitions = 0
-        if self._prev_t is not None:
+        seconds = [0.0, 0.0, 0.0]
+        if self._prev_t is not None and self._prev is not None:
             dt = now - self._prev_t
             if dt <= self._interval * MAX_GAP_INTERVALS:
                 # Trapezoid: each end that was "on" contributes half the step,
                 # so a transition costs at most ±interval/2 of error.
-                on_seconds = dt * (int(bool(self._prev_on)) + int(on)) / 2
-        if on and self._prev_on is False:
-            ignitions = 1
+                seconds = [dt * (int(p) + int(c)) / 2 for p, c in zip(self._prev, cur)]
+        # rising edges; nothing is counted on the very first sample
+        started = [int(self._prev is not None and c and not p)
+                   for p, c in zip(self._prev or (False,) * 3, cur)]
 
-        self._prev_t, self._prev_on = now, on
+        self._prev_t, self._prev = now, cur
+        self._seq += 1
         return {
             "flags": flags,
             **state,
-            "on_seconds": on_seconds,
-            "ignitions": ignitions,
+            "seq": self._seq,
+            "on_seconds": seconds[0],
+            "ch_seconds": seconds[1],
+            "dhw_seconds": seconds[2],
+            "ignitions": started[0],
+            "dhw_starts": started[2],
         }
 
 
-def burner_entities_for(coordinator, entry, device_key: str, kind: str) -> list:
-    """Entities of one platform ("binary_sensor" / "sensor") for the first heater."""
+def burner_counter_sensors(coordinator, entry, device_key: str) -> list:
+    """Run-time / ignition counters for the first heater (local API only)."""
     burner = getattr(coordinator, "burner", None)
     heaters = (coordinator.data or {}).get("heaters") or []
     if burner is None or not heaters:
         return []
     heater = heaters[0]
-    if kind == "binary_sensor":
-        return [MhFlameBinarySensor(burner, entry, heater, device_key)]
     return [
-        MhBurnerRuntimeSensor(burner, entry, heater, device_key),
-        MhBurnerIgnitionsSensor(burner, entry, heater, device_key),
+        cls(burner, entry, heater, device_key)
+        for cls in (
+            MhBurnerRuntimeSensor,
+            MhBurnerChRuntimeSensor,
+            MhBurnerDhwRuntimeSensor,
+            MhBurnerIgnitionsSensor,
+            MhDhwStartsSensor,
+        )
     ]
 
 
@@ -171,32 +182,6 @@ class _MhBurnerEntity(CoordinatorEntity[MhBurnerCoordinator]):
         )
 
 
-class MhFlameBinarySensor(_MhBurnerEntity, BinarySensorEntity):
-    """Burner flame, read from the controller every few seconds."""
-
-    _key = "local_flame"
-    _label = "Пламя"
-    _attr_device_class = BinarySensorDeviceClass.RUNNING
-    _attr_icon = "mdi:fire"
-
-    @property
-    def is_on(self) -> bool | None:
-        data = self.coordinator.data
-        return None if data is None else bool(data.get("flame"))
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        data = self.coordinator.data or {}
-        return {
-            "на_отопление": data.get("ch"),
-            "на_гвс": data.get("dhw"),
-            "насос": data.get("pump"),
-            "связь_с_котлом": data.get("link"),
-            "ошибка_котла": data.get("fault"),
-            "флаги": data.get("flags"),
-        }
-
-
 class _MhBurnerCounter(_MhBurnerEntity, RestoreSensor):
     """Accumulates per-poll deltas on top of the value restored after restart."""
 
@@ -207,6 +192,14 @@ class _MhBurnerCounter(_MhBurnerEntity, RestoreSensor):
     def __init__(self, *args) -> None:
         super().__init__(*args)
         self._total = 0.0
+        self._last_seq: int | None = None
+
+    @property
+    def available(self) -> bool:
+        # The accumulated total is known even when the last poll failed; the
+        # controller often misses a request, and "unavailable" gaps would
+        # only clutter the history.
+        return True
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -220,7 +213,12 @@ class _MhBurnerCounter(_MhBurnerEntity, RestoreSensor):
     @callback
     def _handle_coordinator_update(self) -> None:
         data = self.coordinator.data or {}
-        self._total += float(data.get(self._delta_key) or 0) * self._scale
+        seq = data.get("seq")
+        # HA also notifies listeners when a poll fails, with the previous
+        # (already counted) data — apply each sample exactly once.
+        if seq is not None and seq != self._last_seq:
+            self._last_seq = seq
+            self._total += float(data.get(self._delta_key) or 0) * self._scale
         self.async_write_ha_state()
 
 
@@ -239,6 +237,20 @@ class MhBurnerRuntimeSensor(_MhBurnerCounter):
         return round(self._total, 5)
 
 
+class MhBurnerChRuntimeSensor(MhBurnerRuntimeSensor):
+    _key = "burner_runtime_ch"
+    _label = "Время работы на отопление"
+    _attr_icon = "mdi:radiator"
+    _delta_key = "ch_seconds"
+
+
+class MhBurnerDhwRuntimeSensor(MhBurnerRuntimeSensor):
+    _key = "burner_runtime_dhw"
+    _label = "Время работы на ГВС"
+    _attr_icon = "mdi:water-boiler"
+    _delta_key = "dhw_seconds"
+
+
 class MhBurnerIgnitionsSensor(_MhBurnerCounter):
     _key = "burner_ignitions"
     _label = "Розжиги горелки"
@@ -248,3 +260,14 @@ class MhBurnerIgnitionsSensor(_MhBurnerCounter):
     @property
     def native_value(self) -> int:
         return int(self._total)
+
+
+class MhDhwStartsSensor(MhBurnerIgnitionsSensor):
+    """Times the boiler started heating hot water (not necessarily a new
+    ignition: a combi boiler can switch from heating to hot water with the
+    flame kept on)."""
+
+    _key = "dhw_starts"
+    _label = "Включения ГВС"
+    _attr_icon = "mdi:water-pump"
+    _delta_key = "dhw_starts"

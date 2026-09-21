@@ -176,6 +176,17 @@ class MhHeaterEntity(MhEntity):
             })
         return attrs
 
+    def local_burner(self) -> dict | None:
+        """Burner state from the fast local poller, if it is currently working.
+
+        The cloud reports burner state once a minute; with the local API
+        enabled (hybrid or local-only) this is fresh every few seconds.
+        """
+        burner = getattr(self.coordinator, "burner", None)
+        if burner is not None and burner.last_update_success and burner.data:
+            return burner.data
+        return None
+
     def get_heater(self) -> dict:
         """Return heater state data"""
         if not self.coordinator.data or not self.coordinator.data.get("dataActual", False):

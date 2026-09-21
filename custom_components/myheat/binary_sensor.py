@@ -6,10 +6,9 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .burner import burner_entities_for
 from .const import SOURCE_CLOUD
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
-from .entity import MhEngEntity, MhEntity, MhEnvEntity, MhHeaterEntity, stable_device_key
+from .entity import MhEngEntity, MhEntity, MhEnvEntity, MhHeaterEntity
 
 
 async def async_setup_entry(
@@ -62,8 +61,6 @@ async def async_setup_entry(
             ]
             for eng in coordinator.data.get("engs", [])
         ),
-        # after the heater entities, so the boiler device already exists
-        burner_entities_for(coordinator, entry, stable_device_key(entry), "binary_sensor"),
     )
 
     async_add_entities(entities)
@@ -240,6 +237,22 @@ class MhEngSeverityBinarySensor(MhEngEntity, MhSeverityBinarySensorBase):
         return f"{self._mh_name} {self.eng_name} Статус"
 
 
+class _LocalBurnerMixin:
+    """Refresh together with the fast local burner poller (hybrid/local).
+
+    State itself is taken from MhHeaterEntity.local_burner() when the poller
+    works, otherwise from the minutely cloud data.
+    """
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        burner = getattr(self.coordinator, "burner", None)
+        if burner is not None:
+            self.async_on_remove(
+                burner.async_add_listener(self._handle_coordinator_update)
+            )
+
+
 class MhHeaterBinarySensor(MhHeaterEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool | None:
@@ -267,7 +280,7 @@ class MhHeaterDisabledBinarySensor(MhHeaterBinarySensor):
         return f"{self._mh_name} {self.heater_name} Отключен"
 
 
-class MhHeaterBurnerWaterBinarySensor(MhHeaterBinarySensor):
+class MhHeaterBurnerWaterBinarySensor(_LocalBurnerMixin, MhHeaterBinarySensor):
     _key = "burnerWater"
     _attr_icon = "mdi:water-boiler"
     _attr_device_class = "heat"
@@ -276,8 +289,15 @@ class MhHeaterBurnerWaterBinarySensor(MhHeaterBinarySensor):
     def name(self) -> str:
         return f"{self._mh_name} {self.heater_name} ГВС"
 
+    @property
+    def is_on(self) -> bool | None:
+        local = self.local_burner()
+        if local is not None:
+            return local["flame"] and local["dhw"]
+        return super().is_on
 
-class MhHeaterBurnerHeatingBinarySensor(MhHeaterBinarySensor):
+
+class MhHeaterBurnerHeatingBinarySensor(_LocalBurnerMixin, MhHeaterBinarySensor):
     _key = "burnerHeating"
     _attr_icon = "mdi:radiator"
     _attr_device_class = "heat"
@@ -286,8 +306,15 @@ class MhHeaterBurnerHeatingBinarySensor(MhHeaterBinarySensor):
     def name(self) -> str:
         return f"{self._mh_name} {self.heater_name} Отопление"
 
+    @property
+    def is_on(self) -> bool | None:
+        local = self.local_burner()
+        if local is not None:
+            return local["flame"] and local["ch"]
+        return super().is_on
 
-class MhHeaterBurnerBinarySensor(MhHeaterEntity, BinarySensorEntity):
+
+class MhHeaterBurnerBinarySensor(_LocalBurnerMixin, MhHeaterEntity, BinarySensorEntity):
     """Combined burner state sensor"""
     
     _attr_device_class = "heat"
@@ -303,19 +330,35 @@ class MhHeaterBurnerBinarySensor(MhHeaterEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
+        local = self.local_burner()
+        if local is not None:
+            return local["flame"]
         heater = self.get_heater()
         return heater.get("burnerHeating", False) or heater.get("burnerWater", False)
 
     @property
     def extra_state_attributes(self) -> dict:
         heater = self.get_heater()
-        return {
+        local = self.local_burner()
+        attrs = {
             "heating": heater.get("burnerHeating", False),
             "water": heater.get("burnerWater", False),
             "modulation": heater.get("modulation", 0),
             "flow_temp": heater.get("flowTemp"),
             "return_temp": heater.get("returnTemp"),
+            "источник": "контроллер" if local is not None else "облако",
         }
+        if local is not None:
+            attrs.update(
+                {
+                    "heating": local["flame"] and local["ch"],
+                    "water": local["flame"] and local["dhw"],
+                    "насос": local["pump"],
+                    "связь_с_котлом": local["link"],
+                    "ошибка_котла": local["fault"],
+                }
+            )
+        return attrs
 
 
 class MhEngTurnedOnBinarySensor(MhEngEntity, BinarySensorEntity):

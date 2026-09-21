@@ -118,8 +118,29 @@ async def test_replay_real_hot_water_test(hass, monkeypatch):
     # 18 "on" samples 5 s apart = 85 s between first and last on-sample,
     # plus half a step at each edge = 90 s. True burn: 85..95 s.
     assert burned == pytest.approx(90.0)
+    # all of it was hot water
+    assert sum(d["dhw_seconds"] for d in data) == pytest.approx(90.0)
+    assert sum(d["ch_seconds"] for d in data) == 0
+    assert sum(d["dhw_starts"] for d in data) == 1
     # the pump overrun must not be counted as burner time
     assert all(d["on_seconds"] == 0 for d in data[-4:])
+
+
+async def test_heating_then_hot_water_without_flame_out(hass, monkeypatch):
+    """Tap opened while heating: combi switches to hot water, flame stays lit."""
+    seq = [(0, IDLE), (15, CH_BURNING), (30, CH_BURNING),
+           (45, DHW_BURNING), (60, DHW_BURNING), (75, IDLE)]
+    data = await run(hass, monkeypatch, seq)
+    assert sum(d["ignitions"] for d in data) == 1       # one real ignition
+    assert sum(d["dhw_starts"] for d in data) == 1      # one hot-water session
+    assert sum(d["ch_seconds"] for d in data) == pytest.approx(30.0)
+    assert sum(d["dhw_seconds"] for d in data) == pytest.approx(30.0)
+    assert sum(d["on_seconds"] for d in data) == pytest.approx(60.0)
+
+
+async def test_samples_are_numbered(hass, monkeypatch):
+    data = await run(hass, monkeypatch, [(0, IDLE), (15, IDLE), (30, LocalApiError("x")), (45, IDLE)])
+    assert [d["seq"] for d in data if d] == [1, 2, 3]
 
 
 async def test_short_cycles_counted(hass, monkeypatch):

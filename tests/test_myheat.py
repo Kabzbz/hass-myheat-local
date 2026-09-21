@@ -3,6 +3,7 @@
 Local API responses are payloads captured from a real controller (identifiers replaced).
 """
 
+import pytest
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import device_registry as dr
@@ -90,10 +91,15 @@ CLOUD_INFO = {
 JSON = {"Content-Type": "text/json"}
 
 
-def mock_local(aioclient_mock):
+def mock_local(aioclient_mock, heater_flags=None):
+    obj = LOCAL_OBJ
+    if heater_flags is not None:
+        import copy
+        obj = copy.deepcopy(LOCAL_OBJ)
+        obj["heaters"][0]["f"] = heater_flags
     aioclient_mock.post(f"{BASE}/api/login", json={"status": True}, headers=JSON)
     aioclient_mock.post(f"{BASE}/api/getState", json=LOCAL_STATE, headers=JSON)
-    aioclient_mock.post(f"{BASE}/api/getObjState", json=LOCAL_OBJ, headers=JSON)
+    aioclient_mock.post(f"{BASE}/api/getObjState", json=obj, headers=JSON)
 
 
 def local_data(**overrides):
@@ -395,27 +401,99 @@ async def test_cloud_only_keeps_legacy_presets(hass, aioclient_mock):
     assert set(st.attributes["preset_modes"]) == {"away", "eco", "home", "none", "sleep"}
 
 
-async def test_burner_entities_created(hass, aioclient_mock, caplog):
+COUNTERS = {
+    "sensor.myheat_192_168_1_50_kotel_vremia_raboty_gorelki": ("Время работы горелки", "h"),
+    "sensor.myheat_192_168_1_50_kotel_vremia_raboty_na_otoplenie": ("Время работы на отопление", "h"),
+    "sensor.myheat_192_168_1_50_kotel_vremia_raboty_na_gvs": ("Время работы на ГВС", "h"),
+    "sensor.myheat_192_168_1_50_kotel_rozzhigi_gorelki": ("Розжиги горелки", None),
+    "sensor.myheat_192_168_1_50_kotel_vkliucheniia_gvs": ("Включения ГВС", None),
+}
+
+
+async def test_burner_counters_created(hass, aioclient_mock, caplog):
     mock_local(aioclient_mock)
     entry = await setup(hass, local_data())
-    flame = hass.states.get("binary_sensor.myheat_192_168_1_50_kotel_plamia")
-    runtime = hass.states.get("sensor.myheat_192_168_1_50_kotel_vremia_raboty_gorelki")
-    ignitions = hass.states.get("sensor.myheat_192_168_1_50_kotel_rozzhigi_gorelki")
-    assert flame is not None and runtime is not None and ignitions is not None
-    # no doubled device prefix in names / no config-entry title in entity_ids
-    assert flame.attributes["friendly_name"] == "MyHeat (192.168.1.50) Котел Пламя"
-    assert not [s.entity_id for s in hass.states.async_all() if "mock_title" in s.entity_id]
-    assert runtime.attributes["unit_of_measurement"] == "h"
-    assert runtime.attributes["state_class"] == "total_increasing"
-    assert float(runtime.state) == 0.0
-    assert ignitions.state == "0"
-    # attached to the boiler device, not a new orphan device
-    dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
-    boiler = dev_reg.async_get(ent_reg.async_get(flame.entity_id).device_id)
-    assert boiler.name.endswith("Котел")
-    assert "is using state class" not in caplog.text  # device_class/state_class ok
+    dev_reg = dr.async_get(hass)
+    for eid, (label, unit) in COUNTERS.items():
+        st = hass.states.get(eid)
+        assert st is not None, eid
+        assert st.attributes["friendly_name"] == f"MyHeat (192.168.1.50) Котел {label}"
+        assert st.attributes.get("unit_of_measurement") == unit
+        assert st.attributes["state_class"] == "total_increasing"
+        assert float(st.state) == 0.0
+        # attached to the boiler device
+        assert dev_reg.async_get(ent_reg.async_get(eid).device_id).name.endswith("Котел")
+    assert not [s.entity_id for s in hass.states.async_all() if "mock_title" in s.entity_id]
+    assert not [s.entity_id for s in hass.states.async_all() if "plamia" in s.entity_id]
+    assert "is using state class" not in caplog.text
     assert entry.runtime_data.burner is not None
+
+
+async def test_counter_not_doubled_when_poll_fails(hass, aioclient_mock, monkeypatch):
+    from custom_components.myheat import burner as burner_mod
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(burner_mod.time, "monotonic", lambda: clock["t"])
+    mock_local(aioclient_mock)                     # fixture: burning for heating
+    entry = await setup(hass, local_data())
+    burner = entry.runtime_data.burner
+    eid = "sensor.myheat_192_168_1_50_kotel_vremia_raboty_gorelki"
+
+    clock["t"] += 15
+    await burner.async_refresh()
+    await hass.async_block_till_done()
+    after_ok = float(hass.states.get(eid).state)
+    assert after_ok == pytest.approx(15 / 3600, abs=1e-5)
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(f"{BASE}/api/login", status=500)
+    aioclient_mock.post(f"{BASE}/api/getObjState", status=500)
+    clock["t"] += 15
+    await burner.async_refresh()                   # fails -> listeners get stale data
+    await hass.async_block_till_done()
+    assert burner.last_update_success is False
+    # stays available with the same total: the stale sample is not re-added
+    assert float(hass.states.get(eid).state) == after_ok
+
+    aioclient_mock.clear_requests()
+    mock_local(aioclient_mock)
+    clock["t"] += 15
+    await burner.async_refresh()                   # recovered; gap not integrated
+    await hass.async_block_till_done()
+    assert burner.last_update_success is True
+    assert float(hass.states.get(eid).state) == after_ok
+    clock["t"] += 15
+    await burner.async_refresh()
+    await hass.async_block_till_done()
+    assert float(hass.states.get(eid).state) == pytest.approx(30 / 3600, abs=1e-5)
+
+
+async def test_hybrid_burner_state_comes_from_controller(hass, aioclient_mock):
+    """Cloud says 'heating, no hot water' (minute-old); controller says hot water now."""
+    mock_local(aioclient_mock, heater_flags=0x0935)   # recorded: burning for hot water
+    aioclient_mock.post(CLOUD, json=CLOUD_INFO)       # cloud: burnerHeating=True, water=False
+    await setup(hass, hybrid_data())
+    st = states_by_name(hass)
+    assert st["myheat Источник данных"].state == "cloud"
+    assert st["myheat Котел ГВС"].state == "on"
+    assert st["myheat Котел Отопление"].state == "off"
+    burner = st["myheat Котел Горелка"]
+    assert burner.state == "on"
+    assert burner.attributes["источник"] == "контроллер"
+    assert burner.attributes["water"] is True and burner.attributes["heating"] is False
+    assert burner.attributes["насос"] is True
+
+
+async def test_hybrid_burner_falls_back_to_cloud(hass, aioclient_mock):
+    aioclient_mock.post(f"{BASE}/api/login", status=500)
+    aioclient_mock.post(f"{BASE}/api/getState", status=500)
+    aioclient_mock.post(f"{BASE}/api/getObjState", status=500)
+    aioclient_mock.post(CLOUD, json=CLOUD_INFO)
+    await setup(hass, hybrid_data())
+    st = states_by_name(hass)
+    assert st["myheat Котел ГВС"].state == "off"          # cloud value
+    assert st["myheat Котел Отопление"].state == "on"     # cloud value
+    assert st["myheat Котел Горелка"].attributes["источник"] == "облако"
 
 
 async def test_no_burner_entities_in_cloud_only(hass, aioclient_mock):
@@ -424,7 +502,8 @@ async def test_no_burner_entities_in_cloud_only(hass, aioclient_mock):
     data.update({CONF_LOCAL_ENABLED: False, CONF_LOCAL_ONLY: False})
     entry = await setup(hass, data)
     assert entry.runtime_data.burner is None
-    assert not [s for s in hass.states.async_all() if "plamia" in s.entity_id]
+    assert not [s for s in hass.states.async_all() if "vremia_raboty" in s.entity_id]
+    assert states_by_name(hass)["myheat Котел Горелка"].attributes["источник"] == "облако"
 
 
 async def test_local_heater_return_and_target(hass, aioclient_mock):
