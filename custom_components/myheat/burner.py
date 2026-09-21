@@ -21,6 +21,10 @@ import logging
 import time
 from typing import Any
 
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
 from homeassistant.components.sensor import (
     RestoreSensor,
     SensorDeviceClass,
@@ -34,6 +38,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.util import dt as dt_util
 
 from .const import CONF_NAME, DEFAULT_NAME, DOMAIN, MANUFACTURER, VERSION
 from .local_api import (  # noqa: F401 — flag constants re-exported for tests
@@ -93,7 +98,53 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._prev_t: float | None = None
         # previous (flame, flame-for-heating, flame-for-hot-water); None = unknown
         self._prev: tuple[bool, bool, bool] | None = None
+        self._prev_state: dict[str, bool] | None = None
         self._seq = 0
+        # pump overrun: flame out while the pump keeps running
+        self._overrun_start: float | None = None
+        self._overrun_after = ""
+        self._overrun_seq = 0
+        self._last_overrun: dict[str, Any] | None = None
+
+    @property
+    def interval_seconds(self) -> int:
+        return self._interval
+
+    def _track_overrun(self, state: dict[str, bool], now: float, step_ok: bool) -> None:
+        """Measure flame-out -> pump-stop, each edge at the midpoint of its poll step."""
+        prev = self._prev_state
+        if not step_ok or prev is None or self._prev_t is None:
+            self._overrun_start = None  # gap or first sample: unknown
+            return
+        mid = (self._prev_t + now) / 2
+        if self._overrun_start is not None:
+            if state["flame"]:
+                self._overrun_start = None  # re-ignited: not an overrun
+            elif not state["pump"]:
+                self._record_overrun(mid - self._overrun_start)
+                self._overrun_start = None
+            return
+        if prev["flame"] and not state["flame"]:
+            if prev["dhw"]:
+                self._overrun_after = "ГВС"
+            elif prev["ch"]:
+                self._overrun_after = "отопление"
+            else:
+                self._overrun_after = ""
+            if state["pump"]:
+                self._overrun_start = mid
+            else:
+                # pump stopped within the same step: shorter than the interval
+                self._record_overrun(0.0)
+
+    def _record_overrun(self, seconds: float) -> None:
+        self._overrun_seq += 1
+        self._last_overrun = {
+            "id": self._overrun_seq,
+            "seconds": round(max(seconds, 0.0), 1),
+            "after": self._overrun_after,
+            "ended": dt_util.now().isoformat(timespec="seconds"),
+        }
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -115,17 +166,22 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         seconds = [0.0, 0.0, 0.0]
-        if self._prev_t is not None and self._prev is not None:
+        step_ok = (
+            self._prev_t is not None
+            and self._prev is not None
+            and now - self._prev_t <= self._interval * MAX_GAP_INTERVALS
+        )
+        if step_ok:
             dt = now - self._prev_t
-            if dt <= self._interval * MAX_GAP_INTERVALS:
-                # Trapezoid: each end that was "on" contributes half the step,
-                # so a transition costs at most ±interval/2 of error.
-                seconds = [dt * (int(p) + int(c)) / 2 for p, c in zip(self._prev, cur)]
+            # Trapezoid: each end that was "on" contributes half the step,
+            # so a transition costs at most ±interval/2 of error.
+            seconds = [dt * (int(p) + int(c)) / 2 for p, c in zip(self._prev, cur)]
         # rising edges; nothing is counted on the very first sample
         started = [int(self._prev is not None and c and not p)
                    for p, c in zip(self._prev or (False,) * 3, cur)]
+        self._track_overrun(state, now, step_ok)
 
-        self._prev_t, self._prev = now, cur
+        self._prev_t, self._prev, self._prev_state = now, cur, state
         self._seq += 1
         return {
             "flags": flags,
@@ -136,26 +192,38 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "dhw_seconds": seconds[2],
             "ignitions": started[0],
             "dhw_starts": started[2],
+            "last_overrun": self._last_overrun,
         }
 
 
-def burner_counter_sensors(coordinator, entry, device_key: str) -> list:
-    """Run-time / ignition counters for the first heater (local API only)."""
+def _burner_entities(coordinator, entry, device_key: str, classes) -> list:
     burner = getattr(coordinator, "burner", None)
     heaters = (coordinator.data or {}).get("heaters") or []
     if burner is None or not heaters:
         return []
-    heater = heaters[0]
-    return [
-        cls(burner, entry, heater, device_key)
-        for cls in (
+    return [cls(burner, entry, heaters[0], device_key) for cls in classes]
+
+
+def burner_counter_sensors(coordinator, entry, device_key: str) -> list:
+    """Sensor-platform entities of the fast local poller (local API only)."""
+    return _burner_entities(
+        coordinator,
+        entry,
+        device_key,
+        (
             MhBurnerRuntimeSensor,
             MhBurnerChRuntimeSensor,
             MhBurnerDhwRuntimeSensor,
             MhBurnerIgnitionsSensor,
             MhDhwStartsSensor,
-        )
-    ]
+            MhPumpOverrunSensor,
+        ),
+    )
+
+
+def burner_binary_sensors(coordinator, entry, device_key: str) -> list:
+    """Binary-sensor-platform entities of the fast local poller."""
+    return _burner_entities(coordinator, entry, device_key, (MhPumpBinarySensor,))
 
 
 class _MhBurnerEntity(CoordinatorEntity[MhBurnerCoordinator]):
@@ -271,3 +339,75 @@ class MhDhwStartsSensor(MhBurnerIgnitionsSensor):
     _label = "Включения ГВС"
     _attr_icon = "mdi:water-pump"
     _delta_key = "dhw_starts"
+
+
+class MhPumpBinarySensor(_MhBurnerEntity, BinarySensorEntity):
+    """Boiler pump running now: burning, overrun after the flame, or circulating."""
+
+    _key = "local_pump"
+    _label = "Насос"
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_icon = "mdi:pump"
+
+    @property
+    def is_on(self) -> bool | None:
+        data = self.coordinator.data
+        return None if data is None else bool(data.get("pump"))
+
+
+class MhPumpOverrunSensor(_MhBurnerEntity, RestoreSensor):
+    """How long the pump kept running after the flame went out, last time."""
+
+    _key = "pump_overrun"
+    _label = "Выбег насоса"
+    _attr_icon = "mdi:pump"
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        self._value: float | None = None
+        self._after = ""
+        self._ended: str | None = None
+        self._last_id: int | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_sensor_data()
+        if last is not None and last.native_value is not None:
+            try:
+                self._value = float(last.native_value)
+            except (TypeError, ValueError):
+                self._value = None
+        last_state = await self.async_get_last_state()
+        if last_state is not None:
+            self._after = last_state.attributes.get("после", "")
+            self._ended = last_state.attributes.get("закончился")
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        rec = (self.coordinator.data or {}).get("last_overrun")
+        if rec and rec["id"] != self._last_id:
+            self._last_id = rec["id"]
+            self._value = rec["seconds"]
+            self._after = rec["after"]
+            self._ended = rec["ended"]
+        self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        # the last measured overrun stays valid while the controller is silent
+        return self._value is not None or self.coordinator.last_update_success
+
+    @property
+    def native_value(self) -> float | None:
+        return self._value
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "после": self._after,
+            "закончился": self._ended,
+            "точность": f"±{self.coordinator.interval_seconds} с",
+        }

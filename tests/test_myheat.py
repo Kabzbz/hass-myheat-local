@@ -430,6 +430,34 @@ async def test_burner_counters_created(hass, aioclient_mock, caplog):
     assert entry.runtime_data.burner is not None
 
 
+async def test_pump_entities(hass, aioclient_mock, monkeypatch):
+    from custom_components.myheat import burner as burner_mod
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(burner_mod.time, "monotonic", lambda: clock["t"])
+    mock_local(aioclient_mock, heater_flags=0x0935)        # burning for hot water
+    entry = await setup(hass, local_data())
+    burner = entry.runtime_data.burner
+    pump = hass.states.get("binary_sensor.myheat_192_168_1_50_kotel_nasos")
+    overrun_id = "sensor.myheat_192_168_1_50_kotel_vybeg_nasosa"
+    assert pump is not None and pump.state == "on"
+    assert pump.attributes["friendly_name"] == "MyHeat (192.168.1.50) Котел Насос"
+    st = hass.states.get(overrun_id)
+    assert st is not None and st.state == "unknown"        # nothing measured yet
+    assert st.attributes["unit_of_measurement"] == "s"
+
+    for flags in (0x0924, 0x0924, 0x0920):                 # flame out, pump runs, stops
+        aioclient_mock.clear_requests()
+        mock_local(aioclient_mock, heater_flags=flags)
+        clock["t"] += 15
+        await burner.async_refresh()
+        await hass.async_block_till_done()
+    st = hass.states.get(overrun_id)
+    assert float(st.state) == pytest.approx(30.0)
+    assert st.attributes["после"] == "ГВС"
+    assert st.attributes["точность"] == "±15 с"
+    assert hass.states.get("binary_sensor.myheat_192_168_1_50_kotel_nasos").state == "off"
+
+
 async def test_counter_not_doubled_when_poll_fails(hass, aioclient_mock, monkeypatch):
     from custom_components.myheat import burner as burner_mod
     clock = {"t": 1000.0}

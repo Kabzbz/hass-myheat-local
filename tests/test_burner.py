@@ -126,6 +126,51 @@ async def test_replay_real_hot_water_test(hass, monkeypatch):
     assert all(d["on_seconds"] == 0 for d in data[-4:])
 
 
+def recorded_tap_test(step=5):
+    """The real 13:03:49..13:06:34 recording + the pump-only run seen after it."""
+    seq, t = [], 0
+    for flags, count in ((IDLE, 11), (DHW_BURNING, 18), (PUMP_OVERRUN, 4), (IDLE, 1)):
+        for _ in range(count):
+            seq.append((t, flags))
+            t += step
+    return seq
+
+
+async def test_pump_overrun_from_recording(hass, monkeypatch):
+    data = await run(hass, monkeypatch, recorded_tap_test(), interval=5)
+    rec = data[-1]["last_overrun"]
+    # flame out between 13:06:09 and :14, pump stopped between :29 and :34
+    assert rec["seconds"] == pytest.approx(20.0)
+    assert rec["after"] == "ГВС"
+
+
+async def test_pump_running_alone_is_not_an_overrun(hass, monkeypatch):
+    seq = [(0, IDLE), (5, PUMP_OVERRUN), (10, PUMP_OVERRUN), (15, IDLE)]  # 13:09:59 case
+    data = await run(hass, monkeypatch, seq, interval=5)
+    assert data[-1]["last_overrun"] is None
+    assert [d["pump"] for d in data] == [False, True, True, False]
+
+
+async def test_reignition_interrupts_overrun(hass, monkeypatch):
+    seq = [(0, CH_BURNING), (15, PUMP_OVERRUN), (30, CH_BURNING), (45, PUMP_OVERRUN), (60, IDLE)]
+    data = await run(hass, monkeypatch, seq)
+    rec = data[-1]["last_overrun"]
+    assert rec["id"] == 1                       # only the last, complete overrun
+    assert rec["seconds"] == pytest.approx(15.0)
+    assert rec["after"] == "отопление"
+
+
+async def test_pump_stops_with_flame_is_zero_overrun(hass, monkeypatch):
+    data = await run(hass, monkeypatch, [(0, DHW_BURNING), (15, IDLE)])
+    assert data[-1]["last_overrun"]["seconds"] == 0.0
+
+
+async def test_gap_cancels_overrun(hass, monkeypatch):
+    seq = [(0, DHW_BURNING), (15, PUMP_OVERRUN), (30, LocalApiError("x")), (45, IDLE)]
+    data = await run(hass, monkeypatch, seq)
+    assert data[-1]["last_overrun"] is None
+
+
 async def test_heating_then_hot_water_without_flame_out(hass, monkeypatch):
     """Tap opened while heating: combi switches to hot water, flame stays lit."""
     seq = [(0, IDLE), (15, CH_BURNING), (30, CH_BURNING),
