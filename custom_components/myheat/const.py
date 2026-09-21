@@ -10,7 +10,7 @@ from homeassistant.const import Platform
 NAME = "MyHeat.net"
 DOMAIN = "myheat"
 DOMAIN_DATA = f"{DOMAIN}_data"
-VERSION = "10.03"
+VERSION = "10.04"
 
 ATTRIBUTION = "https://myheat.net"
 MANUFACTURER = "https://myheat.net"
@@ -29,6 +29,10 @@ CONF_LOCAL_POLL_INTERVAL = "local_poll_interval"
 CONF_LOCAL_TIMEOUT = "local_timeout"
 CONF_BURNER_POLL_INTERVAL = "burner_poll_interval"
 CONF_GAS_RATE = "gas_rate"  # m³/h while the burner runs; 0 = no gas estimate
+# Boiler gas flow at 0 % and 100 % modulation, m³/h (from the boiler passport).
+# When both are set, gas is counted from the modulation; 0 = not set.
+CONF_GAS_RATE_MIN = "gas_rate_min"
+CONF_GAS_RATE_MAX = "gas_rate_max"
 
 # Stable per-device key used as basis for entity unique_id (survives entry re-create).
 # For cloud entries it equals str(device_id); for local-only entries — f"local_{serial}".

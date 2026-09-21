@@ -8,7 +8,7 @@ from homeassistant import config_entries
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import async_mock_service
 
-from custom_components.myheat.const import CONF_GAS_RATE
+from custom_components.myheat.const import CONF_GAS_RATE, VERSION
 from custom_components.myheat.diagnostics import async_get_config_entry_diagnostics
 from tests.test_myheat import (
     CLOUD,
@@ -177,7 +177,7 @@ async def test_diagnostics_redacted(hass, aioclient_mock):
     assert "HomeWiFi" not in text
     assert diag["active_source"] == "cloud"
     assert diag["burner_poller"]["last_update_success"] is True
-    assert diag["integration_version"] == "10.03"
+    assert diag["integration_version"] == VERSION
 
 
 def reauth_flows(hass):

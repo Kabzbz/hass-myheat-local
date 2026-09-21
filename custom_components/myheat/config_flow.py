@@ -10,8 +10,16 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 import voluptuous as vol
 
 from .api import MhApiClient
@@ -19,6 +27,8 @@ from .const import (
     CONF_API_KEY,
     CONF_BURNER_POLL_INTERVAL,
     CONF_GAS_RATE,
+    CONF_GAS_RATE_MAX,
+    CONF_GAS_RATE_MIN,
     CONF_DEVICE_ID,
     CONF_DEVICE_KEY,
     CONF_LOCAL_ENABLED,
@@ -41,9 +51,47 @@ from .const import (
     DOMAIN,
     LOCAL_PROTOCOLS,
 )
-from .local_api import LocalApiError, MhLocalApiClient
+from .local_api import LocalApiError, MhLocalApiClient, describe_error
 
 _LOGGER = logging.getLogger(__package__)
+
+PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
+
+def _units(hass: HomeAssistant) -> tuple[str, str]:
+    """(seconds, m³/h) labels for the number boxes — HA doesn't translate them."""
+    if (hass.config.language or "").startswith("ru"):
+        return "с", "м³/ч"
+    return "s", "m³/h"
+
+
+def _seconds(minimum: int, maximum: int, unit: str) -> NumberSelector:
+    return NumberSelector(
+        NumberSelectorConfig(
+            min=minimum,
+            max=maximum,
+            step=1,
+            mode=NumberSelectorMode.BOX,
+            unit_of_measurement=unit,
+        )
+    )
+
+
+def _gas_flow(unit: str) -> NumberSelector:
+    return NumberSelector(
+        NumberSelectorConfig(
+            min=0, max=20, step=0.01, mode=NumberSelectorMode.BOX, unit_of_measurement=unit
+        )
+    )
+
+
+def _suggested(value: Any) -> dict[str, Any]:
+    """Pre-fill a gas box with the saved value; empty when it is not set."""
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        number = 0.0
+    return {"suggested_value": number if number > 0 else None}
 
 
 class MhFlowHandler(ConfigFlow, domain=DOMAIN):
@@ -226,23 +274,26 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
                 # self._devices, just proceed to device-pick step.
                 return await self.async_step_device()
 
+        sec, _flow = _units(self.hass)
         schema = vol.Schema(
             {
                 vol.Required(CONF_LOCAL_HOST, default=DEFAULT_LOCAL_HOST): str,
                 vol.Required(CONF_LOCAL_LOGIN, default=DEFAULT_LOCAL_LOGIN): str,
-                vol.Required(CONF_LOCAL_PASSWORD, default=DEFAULT_LOCAL_PASSWORD): str,
+                vol.Required(
+                    CONF_LOCAL_PASSWORD, default=DEFAULT_LOCAL_PASSWORD
+                ): PASSWORD,
                 vol.Optional(
                     CONF_LOCAL_PROTOCOL, default=DEFAULT_LOCAL_PROTOCOL
                 ): vol.In(LOCAL_PROTOCOLS),
                 vol.Optional(
                     CONF_LOCAL_POLL_INTERVAL, default=DEFAULT_LOCAL_POLL_INTERVAL
-                ): vol.All(int, vol.Range(min=15, max=600)),
+                ): _seconds(15, 600, sec),
                 vol.Optional(
                     CONF_LOCAL_TIMEOUT, default=DEFAULT_LOCAL_TIMEOUT
-                ): vol.All(int, vol.Range(min=10, max=120)),
+                ): _seconds(10, 120, sec),
                 vol.Optional(
                     CONF_BURNER_POLL_INTERVAL, default=DEFAULT_BURNER_POLL_INTERVAL
-                ): vol.All(int, vol.Range(min=5, max=300)),
+                ): _seconds(5, 300, sec),
             }
         )
         return self.async_show_form(
@@ -320,8 +371,11 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
             state = await client.async_get_state()
             serial = state.get("serial")
             return str(serial) if serial else None
-        except (LocalApiError, ValueError, Exception):  # noqa: BLE001
-            _LOGGER.exception("failed to fetch local serial; falling back to host-based key")
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "failed to fetch local serial (%s); falling back to host-based key",
+                describe_error(err),
+            )
             return None
 
     async def _get_devices(self, username: str, api_key: str) -> list[Any]:
@@ -336,8 +390,10 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
             )
             result = await client.async_get_devices()
             return result["devices"]
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception("failed to get devices during config flow")
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "could not get the MyHeat device list: %s", describe_error(err)
+            )
             return []
 
     async def _probe_local(
@@ -362,8 +418,8 @@ class MhFlowHandler(ConfigFlow, domain=DOMAIN):
             )
             await client.async_login()
             return True
-        except (LocalApiError, ValueError):
-            _LOGGER.exception("local controller probe failed")
+        except (LocalApiError, ValueError) as err:
+            _LOGGER.warning("local controller probe failed: %s", describe_error(err))
             return False
 
 
@@ -390,11 +446,15 @@ class MhOptionsFlow(OptionsFlow):
         if user_input is not None:
             local_only = bool(user_input.get(CONF_LOCAL_ONLY))
             local_enabled = local_only or bool(user_input.get(CONF_LOCAL_ENABLED))
+            gas_min = float(user_input.get(CONF_GAS_RATE_MIN) or 0)
+            gas_max = float(user_input.get(CONF_GAS_RATE_MAX) or 0)
 
             if local_only is False and not has_cloud:
                 # Entry was created as local-only (no cloud creds) — can't
                 # switch to cloud/hybrid from here.
                 errors["base"] = "cloud_creds_required"
+            elif (gas_min > 0) != (gas_max > 0) or gas_max < gas_min:
+                errors["base"] = "gas_range_invalid"
             elif local_enabled:
                 ok = await self._probe_local(user_input)
                 if not ok:
@@ -425,6 +485,8 @@ class MhOptionsFlow(OptionsFlow):
                             )
                         ),
                         CONF_GAS_RATE: float(user_input.get(CONF_GAS_RATE) or 0),
+                        CONF_GAS_RATE_MIN: gas_min,
+                        CONF_GAS_RATE_MAX: gas_max,
                     }
                 )
                 # async_update_entry fires the entry's update listener, which
@@ -433,6 +495,7 @@ class MhOptionsFlow(OptionsFlow):
                 return self.async_create_entry(title="", data={})
 
         current = user_input or data
+        sec, flow = _units(self.hass)
         schema = vol.Schema(
             {
                 vol.Optional(
@@ -454,7 +517,7 @@ class MhOptionsFlow(OptionsFlow):
                 vol.Optional(
                     CONF_LOCAL_PASSWORD,
                     default=current.get(CONF_LOCAL_PASSWORD) or DEFAULT_LOCAL_PASSWORD,
-                ): str,
+                ): PASSWORD,
                 vol.Optional(
                     CONF_LOCAL_PROTOCOL,
                     default=current.get(CONF_LOCAL_PROTOCOL) or DEFAULT_LOCAL_PROTOCOL,
@@ -464,22 +527,30 @@ class MhOptionsFlow(OptionsFlow):
                     default=int(
                         current.get(CONF_LOCAL_POLL_INTERVAL) or DEFAULT_LOCAL_POLL_INTERVAL
                     ),
-                ): vol.All(int, vol.Range(min=15, max=600)),
+                ): _seconds(15, 600, sec),
                 vol.Optional(
                     CONF_LOCAL_TIMEOUT,
                     default=int(current.get(CONF_LOCAL_TIMEOUT) or DEFAULT_LOCAL_TIMEOUT),
-                ): vol.All(int, vol.Range(min=10, max=120)),
+                ): _seconds(10, 120, sec),
                 vol.Optional(
                     CONF_BURNER_POLL_INTERVAL,
                     default=int(
                         current.get(CONF_BURNER_POLL_INTERVAL)
                         or DEFAULT_BURNER_POLL_INTERVAL
                     ),
-                ): vol.All(int, vol.Range(min=5, max=300)),
+                ): _seconds(5, 300, sec),
+                # suggested (not default) values: an emptied box means "not set"
                 vol.Optional(
-                    CONF_GAS_RATE,
-                    default=float(current.get(CONF_GAS_RATE) or 0),
-                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=20)),
+                    CONF_GAS_RATE, description=_suggested(current.get(CONF_GAS_RATE))
+                ): _gas_flow(flow),
+                vol.Optional(
+                    CONF_GAS_RATE_MIN,
+                    description=_suggested(current.get(CONF_GAS_RATE_MIN)),
+                ): _gas_flow(flow),
+                vol.Optional(
+                    CONF_GAS_RATE_MAX,
+                    description=_suggested(current.get(CONF_GAS_RATE_MAX)),
+                ): _gas_flow(flow),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
@@ -497,6 +568,8 @@ class MhOptionsFlow(OptionsFlow):
             )
             await client.async_login()
             return True
-        except (LocalApiError, ValueError):
-            _LOGGER.exception("local controller probe failed (options flow)")
+        except (LocalApiError, ValueError) as err:
+            _LOGGER.warning(
+                "local controller probe failed (options flow): %s", describe_error(err)
+            )
             return False

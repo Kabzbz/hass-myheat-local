@@ -21,6 +21,7 @@ from .const import (  # noqa: F401
 from .local_api import (
     LocalApiError,
     MhLocalApiClient,
+    describe_error,
     translate_local_to_cloud,
 )
 
@@ -109,6 +110,11 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
     def local_only(self) -> bool:
         return self._local_only
 
+    @property
+    def local_cache_at(self) -> float:
+        """time.monotonic() of the data in data["_local"]; 0 = stale/never."""
+        return self._local_cache_at
+
     async def _fetch_local(self) -> dict:
         """Read both /api/getState and /api/getObjState; return cloud-shaped dict.
 
@@ -168,7 +174,7 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
             state = await self.local_api.async_get_state()
             obj_state = await self._get_obj_state()
         except LocalApiError as err:
-            _LOGGER.debug("background local refresh failed: %s", err)
+            _LOGGER.debug("background local refresh failed: %s", describe_error(err))
             return
         translated = translate_local_to_cloud(state=state, obj_state=obj_state)
         self._local_cache = translated["_local"]
@@ -212,7 +218,7 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
                 return data
             except LocalApiError as err:
                 self.active_source = SOURCE_OFFLINE
-                raise UpdateFailed(f"local: {err}") from err
+                raise UpdateFailed(f"local: {describe_error(err)}") from err
 
         # Try cloud
         cloud_err: Exception | None = None
@@ -220,6 +226,8 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
             try:
                 data = await self.api.async_get_device_info(local_fallback=False)
                 self._cloud_refusals = 0
+                if self.active_source == SOURCE_LOCAL:
+                    _LOGGER.info("Switched back to CLOUD source")
                 self.active_source = SOURCE_CLOUD
                 self._apply_interval_for_source()
                 # Even in cloud mode, refresh local-state cache every 10 min
@@ -231,22 +239,26 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
                 return data
             except Exception as err:  # noqa: BLE001 — cloud client raises many types
                 cloud_err = err
-                _LOGGER.warning("cloud poll failed: %s", err)
+                # the client has already warned (once per outage) with the reason
+                _LOGGER.debug("cloud poll failed: %s", describe_error(err))
                 self._note_cloud_refusal(err)
 
+        cloud_why = describe_error(cloud_err) if cloud_err else "not configured"
         # Cloud failed; try local fallback if user enabled it
         if self._local_enabled and self.local_api is not None:
             try:
                 data = await self._fetch_local()
+                if self.active_source != SOURCE_LOCAL:
+                    _LOGGER.info("Switched to LOCAL source (cloud: %s)", cloud_why)
                 self.active_source = SOURCE_LOCAL
                 self._apply_interval_for_source()
-                _LOGGER.info("Switched to LOCAL source (cloud is down)")
                 return data
             except LocalApiError as err:
                 self.active_source = SOURCE_OFFLINE
                 raise UpdateFailed(
-                    f"both cloud and local failed (cloud: {cloud_err}; local: {err})"
+                    f"both cloud and local failed (cloud: {cloud_why}; "
+                    f"local: {describe_error(err)})"
                 ) from err
 
         self.active_source = SOURCE_OFFLINE
-        raise UpdateFailed(f"cloud: {cloud_err}")
+        raise UpdateFailed(f"cloud: {cloud_why}")

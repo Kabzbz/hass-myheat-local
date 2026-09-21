@@ -51,6 +51,14 @@ HEATER_FLAG_LINK = 0x0020
 HEATER_FLAG_LOW_PRESSURE = 0x0400  # web UI: "Низкое давление в контуре отопления"
 
 
+def describe_error(err: BaseException) -> str:
+    """One-line description for logs: str(TimeoutError()) is empty, so the
+    class name is always included."""
+    text = str(err).strip()
+    name = type(err).__name__
+    return f"{name}: {text}" if text else name
+
+
 class LocalApiError(Exception):
     """Generic local-API failure (network/HTTP/parse)."""
 
@@ -106,7 +114,7 @@ class MhLocalApiClient:
                     raise LocalApiError(f"login HTTP {resp.status}")
                 data = await resp.json(content_type=None)
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            raise LocalApiError(f"login failed: {err}") from err
+            raise LocalApiError(f"login failed: {describe_error(err)}") from err
 
         if not isinstance(data, dict) or not data.get("status"):
             raise LocalAuthError("controller rejected credentials")
@@ -131,7 +139,7 @@ class MhLocalApiClient:
                     raise LocalApiError(f"{path}: unexpected content-type {ctype}")
                 return await resp.json(content_type=None)
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            raise LocalApiError(f"{path}: {err}") from err
+            raise LocalApiError(f"{path}: {describe_error(err)}") from err
 
     async def _post_with_relogin(self, path: str, payload: dict | None = None) -> Any:
         async with self._lock:
@@ -364,6 +372,9 @@ def translate_local_to_cloud(
             "deviceFlags": obj.get("deviceFlags"),
             "simSignal": obj.get("simSignal"),
             "simBalance": obj.get("simBalance"),
+            # true/false only when security is set up on the controller;
+            # its web UI shows "Поставить на охрану" unless this is true
+            "securityArmed": obj.get("securityArmed"),
             "env_limits": env_limits,
         },
     }

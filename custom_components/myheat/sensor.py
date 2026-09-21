@@ -155,10 +155,14 @@ class MhHeaterReturnTempSensor(MhHeaterSensor):
 
 
 class MhHeaterTargetTempSensor(MhHeaterSensor):
+    """Boiler flow target. Only the cloud reports it (often empty or 0 while
+    the boiler is idle), the local API never does — off by default."""
+
     _key = "targetTemp"
     _attr_icon = "mdi:thermometer-auto"
     _attr_device_class = "temperature"
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_entity_registry_enabled_default = False
 
     @property
     def name(self) -> str:

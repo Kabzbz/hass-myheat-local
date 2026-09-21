@@ -40,7 +40,17 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_GAS_RATE, CONF_NAME, DEFAULT_NAME, DOMAIN, MANUFACTURER, VERSION
+from .const import (
+    CONF_GAS_RATE,
+    CONF_GAS_RATE_MAX,
+    CONF_GAS_RATE_MIN,
+    CONF_NAME,
+    DEFAULT_NAME,
+    DOMAIN,
+    MANUFACTURER,
+    SOURCE_CLOUD,
+    VERSION,
+)
 from .local_api import (  # noqa: F401 — flag constants re-exported for tests
     HEATER_FLAG_CH,
     HEATER_FLAG_DHW,
@@ -60,6 +70,32 @@ _LOGGER = logging.getLogger(__package__)
 MAX_GAP_INTERVALS = 3
 
 
+def _positive(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def gas_config(data) -> tuple[float, float | None, float | None]:
+    """Gas settings from entry.data: (average m³/h, m³/h at 0 %, at 100 %).
+
+    The range counts only when both ends are set and max >= min.
+    """
+    rate = _positive(data.get(CONF_GAS_RATE)) or 0.0
+    low = _positive(data.get(CONF_GAS_RATE_MIN))
+    high = _positive(data.get(CONF_GAS_RATE_MAX))
+    if low is None or high is None or high < low:
+        low = high = None
+    return rate, low, high
+
+
+def gas_configured(data) -> bool:
+    rate, low, _high = gas_config(data)
+    return rate > 0 or low is not None
+
+
 def decode_heater_flags(flags: int) -> dict[str, bool]:
     return {
         "link": bool(flags & HEATER_FLAG_LINK),
@@ -75,9 +111,14 @@ def decode_heater_flags(flags: int) -> dict[str, bool]:
 class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Polls /api/getObjState often and reports burner state + per-poll deltas.
 
-    Each update carries the on-time and ignitions that happened since the
-    previous sample; the counter sensors add those deltas to their restored
-    totals, so the totals survive HA restarts without shared storage.
+    Each update carries the on-time, gas and ignitions that happened since
+    the previous sample; the counter sensors add those deltas to their
+    restored totals, so the totals survive HA restarts without shared storage.
+
+    Gas: with the boiler's rate at 0 % and 100 % modulation set, each step
+    burns rate = min + (max − min) × modulation / 100. Modulation comes from
+    the cloud only (main coordinator); when it is unknown the average rate is
+    used, or the middle of the range if no average rate is set.
     """
 
     def __init__(
@@ -86,6 +127,7 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         entry,
         local_client: MhLocalApiClient,
         interval_seconds: int,
+        main=None,
     ) -> None:
         super().__init__(
             hass,
@@ -97,6 +139,9 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._local = local_client
         self._interval = interval_seconds
+        # main (cloud/local) coordinator: the only source of modulation
+        self._main = main
+        self._gas_rate, self._gas_min, self._gas_max = gas_config(entry.data)
         self._prev_t: float | None = None
         # previous (flame, flame-for-heating, flame-for-hot-water); None = unknown
         self._prev: tuple[bool, bool, bool] | None = None
@@ -151,6 +196,43 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # pump stopped within the same step: shorter than the interval
                 self._record_overrun(0.0)
 
+    def _cloud_modulation(self, heater_id: Any) -> float | None:
+        """Burner modulation, %, from the cloud (the local API has none).
+
+        None when unknown: the cloud is not the active source, its data is
+        stale, or its snapshot (the controller sends one a minute) predates
+        this burn — its 0 % would then mean "not burning", not "minimum".
+        """
+        main = self._main
+        if main is None or main.active_source != SOURCE_CLOUD:
+            return None
+        data = main.data or {}
+        if not data.get("dataActual"):
+            return None
+        heaters = data.get("heaters") or []
+        heater = next((h for h in heaters if h.get("id") == heater_id), None)
+        if heater is None:
+            heater = heaters[0] if heaters else {}
+        if not (heater.get("burnerHeating") or heater.get("burnerWater")):
+            return None
+        try:
+            modulation = float(heater["modulation"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        return min(max(modulation, 0.0), 100.0)
+
+    def _gas_rate_now(self, heater_id: Any) -> tuple[float, float | None]:
+        """(m³/h for this step, modulation % it came from or None)."""
+        if self._gas_min is None or self._gas_max is None:
+            return self._gas_rate, None
+        modulation = self._cloud_modulation(heater_id)
+        if modulation is None:
+            if self._gas_rate > 0:
+                return self._gas_rate, None
+            return (self._gas_min + self._gas_max) / 2, None
+        span = self._gas_max - self._gas_min
+        return self._gas_min + span * modulation / 100, modulation
+
     def _record_overrun(self, seconds: float) -> None:
         self._overrun_seq += 1
         self._last_overrun = {
@@ -172,7 +254,8 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = time.monotonic()
         self.last_obj, self.last_obj_at = obj, now
         heaters = obj.get("heaters") or []
-        flags = int((heaters[0] if heaters else {}).get("f") or 0)
+        heater = heaters[0] if heaters else {}
+        flags = int(heater.get("f") or 0)
         state = decode_heater_flags(flags)
         cur = (
             state["flame"],
@@ -196,6 +279,12 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                    for p, c in zip(self._prev or (False,) * 3, cur)]
         self._track_overrun(state, now, step_ok)
 
+        gas = [0.0, 0.0, 0.0]
+        gas_rate = modulation = None
+        if seconds[0] > 0:
+            gas_rate, modulation = self._gas_rate_now(heater.get("i"))
+            gas = [s * gas_rate / 3600 for s in seconds]
+
         self._prev_t, self._prev, self._prev_state = now, cur, state
         self._seq += 1
         return {
@@ -205,6 +294,12 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "on_seconds": seconds[0],
             "ch_seconds": seconds[1],
             "dhw_seconds": seconds[2],
+            # m³ burned during this step (0 when gas is not configured)
+            "gas_m3": gas[0],
+            "gas_ch_m3": gas[1],
+            "gas_dhw_m3": gas[2],
+            "gas_rate": gas_rate or None,
+            "gas_modulation": modulation,
             "ignitions": started[0],
             "dhw_starts": started[2],
             "last_overrun": self._last_overrun,
@@ -229,7 +324,7 @@ def burner_counter_sensors(coordinator, entry, device_key: str) -> list:
         MhDhwStartsSensor,
         MhPumpOverrunSensor,
     ]
-    if float(entry.data.get(CONF_GAS_RATE) or 0) > 0:
+    if gas_configured(entry.data):
         classes += [MhGasTotalSensor, MhGasChSensor, MhGasDhwSensor]
     return _burner_entities(coordinator, entry, device_key, classes)
 
@@ -347,6 +442,8 @@ class MhBurnerIgnitionsSensor(_MhBurnerCounter):
     _key = "burner_ignitions"
     _label = "Розжиги горелки"
     _attr_icon = "mdi:counter"
+    # a unit makes HA keep long-term statistics (utility_meter, graphs)
+    _attr_native_unit_of_measurement = "раз"
     _delta_key = "ignitions"
 
     @property
@@ -477,33 +574,46 @@ class MhBoilerLinkBinarySensor(_MhFlagBinarySensor):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
 
 
-class MhGasTotalSensor(MhBurnerRuntimeSensor):
-    """Gas estimate for the Energy dashboard: burner hours × configured rate.
+class _MhGasSensor(MhBurnerRuntimeSensor):
+    """Gas estimate for the Energy dashboard, m³.
 
-    The rate (m³/h while the burner runs) is set in the integration options;
-    changing it applies from then on, the accumulated total is kept.
+    The burner poller works out the m³ of every step (from the modulation or
+    the configured rate); changed settings apply from then on, the
+    accumulated total is kept.
     """
 
-    _key = "gas_total"
-    _label = "Газ (оценка)"
     _attr_icon = "mdi:fire"
     _attr_device_class = SensorDeviceClass.GAS
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
     _attr_suggested_display_precision = 3
-    _delta_key = "on_seconds"
-
-    def __init__(self, *args) -> None:
-        super().__init__(*args)
-        self._scale = float(self._entry.data.get(CONF_GAS_RATE) or 0) / 3600
+    _scale = 1.0
 
 
-class MhGasChSensor(MhGasTotalSensor):
+class MhGasTotalSensor(_MhGasSensor):
+    _key = "gas_total"
+    _label = "Газ (оценка)"
+    _delta_key = "gas_m3"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data or {}
+        rate = data.get("gas_rate")
+        modulation = data.get("gas_modulation")
+        if modulation is not None and float(modulation).is_integer():
+            modulation = int(modulation)
+        return {
+            "расход_м3_ч": round(rate, 3) if rate else None,
+            "модуляция": modulation,
+        }
+
+
+class MhGasChSensor(_MhGasSensor):
     _key = "gas_ch"
     _label = "Газ на отопление (оценка)"
-    _delta_key = "ch_seconds"
+    _delta_key = "gas_ch_m3"
 
 
-class MhGasDhwSensor(MhGasTotalSensor):
+class MhGasDhwSensor(_MhGasSensor):
     _key = "gas_dhw"
     _label = "Газ на ГВС (оценка)"
-    _delta_key = "dhw_seconds"
+    _delta_key = "gas_dhw_m3"

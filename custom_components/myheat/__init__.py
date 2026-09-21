@@ -37,7 +37,7 @@ from .const import (
 from homeassistant.helpers import entity_registry as er
 from .const import CONF_NAME  # noqa: F401
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
-from .local_api import MhLocalApiClient
+from .local_api import MhLocalApiClient, describe_error
 from .services import async_setup_services
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
@@ -112,6 +112,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MhConfigEntry):
             entry,
             local_client,
             int(entry.data.get(CONF_BURNER_POLL_INTERVAL, DEFAULT_BURNER_POLL_INTERVAL)),
+            main=coordinator,  # modulation for the gas estimate comes from the cloud
         )
         # Plain refresh, not first_refresh: a controller hiccup must not block
         # the whole integration (in hybrid mode the cloud still works).
@@ -178,7 +179,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: MhConfigEntry) -> bool
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.warning(
                     "Migration: could not fetch local serial (%s); using host fallback",
-                    exc,
+                    describe_error(exc),
                 )
         if not device_key:
             device_key = f"local_host_{entry.data.get(CONF_LOCAL_HOST, entry.entry_id)}"

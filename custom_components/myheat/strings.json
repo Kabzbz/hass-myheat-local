@@ -19,9 +19,9 @@
           "local_login": "Локальный логин",
           "local_password": "Локальный пароль",
           "local_protocol": "Протокол (http / https)",
-          "local_poll_interval": "Интервал опроса в локальном режиме (сек)",
-          "local_timeout": "Тайм-аут запроса (сек)",
-          "burner_poll_interval": "Опрос горелки, сек (точный учёт времени работы)"
+          "local_poll_interval": "Local poll interval",
+          "local_timeout": "Request timeout",
+          "burner_poll_interval": "Burner poll interval (accurate run time)"
         }
       },
       "device": {
@@ -65,16 +65,24 @@
           "local_login": "Локальный логин",
           "local_password": "Локальный пароль",
           "local_protocol": "Протокол (http / https)",
-          "local_poll_interval": "Интервал опроса в локальном режиме (сек)",
-          "local_timeout": "Тайм-аут запроса (сек)",
-          "burner_poll_interval": "Опрос горелки, сек (точный учёт времени работы)",
-          "gas_rate": "Расход газа при работе горелки, м³/ч (0 — не считать газ)"
+          "local_poll_interval": "Local poll interval",
+          "local_timeout": "Request timeout",
+          "burner_poll_interval": "Burner poll interval (accurate run time)",
+          "gas_rate": "Average gas flow while the burner runs",
+          "gas_rate_min": "Gas flow at minimum power (0 % modulation)",
+          "gas_rate_max": "Gas flow at full power (100 % modulation)"
+        },
+        "data_description": {
+          "gas_rate": "Gas = burner time × this flow. Used when the range below is not set, and while modulation is unknown. Empty = no gas estimate.",
+          "gas_rate_min": "From the boiler manual (Protherm Gepard 24: 1.05). With both minimum and maximum set, gas follows the burner modulation from the MyHeat cloud.",
+          "gas_rate_max": "From the boiler manual (Protherm Gepard 24: 2.80). Only the cloud reports modulation: without it the average flow is used, or the middle of the range if that is empty."
         }
       }
     },
     "error": {
       "cannot_connect_local": "Не удалось достучаться до контроллера. Проверьте IP, login и password.",
-      "cloud_creds_required": "Интеграция добавлена в режиме «Только локально» — облачных данных нет. Чтобы включить облако, удалите и добавьте интеграцию заново с логином и API-ключом."
+      "cloud_creds_required": "Интеграция добавлена в режиме «Только локально» — облачных данных нет. Чтобы включить облако, удалите и добавьте интеграцию заново с логином и API-ключом.",
+      "gas_range_invalid": "Set both ends of the gas range — minimum and maximum (maximum not below minimum) — or leave both empty."
     }
   },
   "services": {

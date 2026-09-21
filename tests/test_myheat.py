@@ -410,8 +410,8 @@ COUNTERS = {
     "sensor.myheat_192_168_1_50_kotel_vremia_raboty_gorelki": ("Время работы горелки", "h"),
     "sensor.myheat_192_168_1_50_kotel_vremia_raboty_na_otoplenie": ("Время работы на отопление", "h"),
     "sensor.myheat_192_168_1_50_kotel_vremia_raboty_na_gvs": ("Время работы на ГВС", "h"),
-    "sensor.myheat_192_168_1_50_kotel_rozzhigi_gorelki": ("Розжиги горелки", None),
-    "sensor.myheat_192_168_1_50_kotel_vkliucheniia_gvs": ("Включения ГВС", None),
+    "sensor.myheat_192_168_1_50_kotel_rozzhigi_gorelki": ("Розжиги горелки", "раз"),
+    "sensor.myheat_192_168_1_50_kotel_vkliucheniia_gvs": ("Включения ГВС", "раз"),
 }
 
 
@@ -571,4 +571,7 @@ async def test_local_heater_return_and_target(hass, aioclient_mock):
     await setup(hass, local_data())
     assert float(hass.states.get("sensor.myheat_192_168_1_50_kotel_podacha").state) == 57.5
     assert float(hass.states.get("sensor.myheat_192_168_1_50_kotel_obratka").state) == 51.0
-    assert hass.states.get("sensor.myheat_192_168_1_50_kotel_tselevaia").state == "unknown"
+    # the target is never filled locally: the entity exists but is off by default
+    target = er.async_get(hass).async_get("sensor.myheat_192_168_1_50_kotel_tselevaia")
+    assert target is not None
+    assert target.disabled_by is er.RegistryEntryDisabler.INTEGRATION

@@ -2,14 +2,18 @@
 
 import asyncio
 import logging
-import socket
 from typing import Any, Union
 
 import aiohttp
 import voluptuous as vol
 
 from .const import VERSION
-from .local_api import LocalApiError, LocalUnsupportedError, MhLocalApiClient
+from .local_api import (
+    LocalApiError,
+    LocalUnsupportedError,
+    MhLocalApiClient,
+    describe_error,
+)
 
 TIMEOUT = 10
 
@@ -136,6 +140,10 @@ class RPCError(Exception):
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} code: {self.code}>"
 
+    def __str__(self) -> str:
+        msg = self._full_response.get("msg")
+        return f"err={self.code}" + (f" ({msg})" if msg else "")
+
 
 class MhApiClient:
     """API helper to manipulate with myheat.net cloud, with optional local fallback.
@@ -163,6 +171,8 @@ class MhApiClient:
         self._session: aiohttp.ClientSession = session
         self._local = local_client
         self._local_only = bool(local_only)
+        # inside a streak of failed cloud requests: log only the first one
+        self._failing = False
         if local_only and local_client is None:
             raise ValueError("local_only=True requires a local_client")
 
@@ -207,7 +217,9 @@ class MhApiClient:
         except Exception as err:  # noqa: BLE001
             if self._local is None or not local_fallback:
                 raise
-            _LOGGER.warning("cloud getDeviceInfo failed (%s) — using local", err)
+            _LOGGER.warning(
+                "cloud getDeviceInfo failed (%s) — using local", describe_error(err)
+            )
             return await self._fetch_via_local()
 
     async def _fetch_via_local(self) -> dict:
@@ -231,7 +243,8 @@ class MhApiClient:
             if self._local is None or local_call is None:
                 raise
             _LOGGER.warning(
-                "cloud write failed (%s) — retrying via local", cloud_err
+                "cloud write failed (%s) — retrying via local",
+                describe_error(cloud_err),
             )
             await local_call()
 
@@ -380,31 +393,32 @@ class MhApiClient:
                 if data["err"] != 0:
                     raise RPCError(data)
 
-                return data.get("data", {})
-
-        except (asyncio.TimeoutError, asyncio.CancelledError) as ex:
-            _LOGGER.exception(
-                "Timeout error fetching information from %s - %s",
-                url,
-                ex,
-            )
+        # The cloud is often slow or unreachable and the callers fall back to
+        # the controller, so these are warnings without a traceback. No
+        # CancelledError here: that is HA stopping or reloading, not a timeout.
+        except RPCError as ex:
+            self._log_failure(action, f"refused, {ex}")
             raise
-        except (KeyError, TypeError) as ex:
-            _LOGGER.exception(
-                "Error parsing information from %s - %s",
-                url,
-                ex,
-            )
+        except TimeoutError:  # before OSError: TimeoutError is one of them
+            self._log_failure(action, f"no answer in {TIMEOUT} s")
             raise
-        except (aiohttp.ClientError, socket.gaierror) as ex:
-            _LOGGER.exception(
-                "Error fetching information from %s - %s",
-                url,
-                ex,
-            )
+        except (aiohttp.ClientError, OSError) as ex:  # incl. DNS errors
+            self._log_failure(action, describe_error(ex))
             raise
-        except Exception as ex:  # pylint: disable=broad-except
-            _LOGGER.exception("Something really wrong happened! - %s", ex)
+        except (KeyError, TypeError, ValueError, vol.Invalid) as ex:
+            self._log_failure(action, f"unexpected answer, {describe_error(ex)}")
+            raise
+        except Exception:
+            _LOGGER.exception("MyHeat cloud: %s failed unexpectedly", action)
             raise
 
-        raise AssertionError("reached unreachable code")
+        if self._failing:
+            self._failing = False
+            _LOGGER.info("MyHeat cloud answers again")
+        return data.get("data", {})
+
+    def _log_failure(self, action: str, why: str) -> None:
+        """Warn on the first failure of a streak; the repeats go to debug."""
+        level = logging.DEBUG if self._failing else logging.WARNING
+        self._failing = True
+        _LOGGER.log(level, "MyHeat cloud: %s failed: %s", action, why)
