@@ -22,30 +22,13 @@ ENV_TYPE_DHW_TEMPERATURE = "dhw_temperature"
 ENV_TYPE_FLOOR_TEMPERATURE = "floor_temperature"  # added in upstream 0.8.0
 ENV_TYPE_HUMIDITY = "humidity"  # added in upstream 0.10.0
 
-# Env types that carry temperature values (used to pick the right sensor
-# device_class / unit for MhEnvSensor).
-TEMPERATURE_ENV_TYPES = frozenset({
-    ENV_TYPE_ROOM_TEMPERATURE,
-    ENV_TYPE_CIRCUIT_TEMPERATURE,
-    ENV_TYPE_BOILER_TEMPERATURE,
-    ENV_TYPE_DHW_TEMPERATURE,
-    ENV_TYPE_FLOOR_TEMPERATURE,
-    "temperature",
-})
-
-# Env types that should be exposed as Climate entities (vs. Water Heater / Sensor).
-CLIMATE_ENV_TYPES = frozenset({
+# Env types that should be exposed as Climate entities (vs. Water Heater).
+CLIMATE_ENV_TYPES = (
     ENV_TYPE_ROOM_TEMPERATURE,
     ENV_TYPE_CIRCUIT_TEMPERATURE,
     ENV_TYPE_FLOOR_TEMPERATURE,
     "temperature",
-})
-
-# Env types that should be exposed as Water Heater entities.
-WATER_HEATER_ENV_TYPES = frozenset({
-    ENV_TYPE_BOILER_TEMPERATURE,
-    ENV_TYPE_DHW_TEMPERATURE,
-})
+)
 
 HEADERS = {
     "Content-Type": "application/json; charset=UTF-8",
@@ -209,14 +192,20 @@ class MhApiClient:
             }
         return await self.rpc("getDevices")
 
-    async def async_get_device_info(self, *, device_id: int | None = None) -> dict:
-        """Get device state and objects (cloud, with optional local fallback)."""
+    async def async_get_device_info(
+        self, *, device_id: int | None = None, local_fallback: bool = True
+    ) -> dict:
+        """Get device state and objects (cloud, with optional local fallback).
+
+        The coordinator passes local_fallback=False: it does its own fallback
+        and must know whether the data really came from the cloud.
+        """
         if self._local_only:
             return await self._fetch_via_local()
         try:
             return await self.rpc("getDeviceInfo", deviceId=device_id)
         except Exception as err:  # noqa: BLE001
-            if self._local is None:
+            if self._local is None or not local_fallback:
                 raise
             _LOGGER.warning("cloud getDeviceInfo failed (%s) — using local", err)
             return await self._fetch_via_local()

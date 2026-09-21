@@ -10,7 +10,7 @@ from homeassistant.const import Platform
 NAME = "MyHeat.net"
 DOMAIN = "myheat"
 DOMAIN_DATA = f"{DOMAIN}_data"
-VERSION = "9.07"
+VERSION = "10.01"
 
 ATTRIBUTION = "https://myheat.net"
 MANUFACTURER = "https://myheat.net"

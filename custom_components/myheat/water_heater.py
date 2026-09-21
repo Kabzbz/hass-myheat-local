@@ -35,6 +35,7 @@ async def async_setup_entry(
             MhEnvWaterHeater(coordinator, entry, env)
             for env in coordinator.data.get("envs", [])
             if env.get("type") in WATER_HEATER_ENV_TYPES
+            and not env.get("_readonly")
         ]
     )
 

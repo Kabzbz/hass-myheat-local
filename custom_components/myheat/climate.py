@@ -18,7 +18,11 @@ from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .api import ENV_TYPE_BOILER_TEMPERATURE, ENV_TYPE_DHW_TEMPERATURE
+from .api import (
+    ENV_TYPE_BOILER_TEMPERATURE,
+    ENV_TYPE_DHW_TEMPERATURE,
+    ENV_TYPE_HUMIDITY,
+)
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
 from .entity import MhEnvEntity
 
@@ -49,6 +53,8 @@ async def async_setup_entry(
             MhEnvClimate(coordinator, entry, env)
             for env in coordinator.data.get("envs", [])
             if env.get("type") not in WATER_HEATER_ENV_TYPES
+            and env.get("type") != ENV_TYPE_HUMIDITY
+            and not env.get("_readonly")
         ]
     )
 

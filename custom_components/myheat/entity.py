@@ -20,6 +20,8 @@ from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
 
 _logger = logging.getLogger(__package__)
 
+_HAS_VIA_DEVICE_ID = "via_device_id" in DeviceInfo.__annotations__
+
 
 def stable_device_key(entry: MhConfigEntry) -> str:
     """Stable per-device key used as the unique_id base.
@@ -75,17 +77,22 @@ class MhEntity(CoordinatorEntity[MhDataUpdateCoordinator]):
             })
 
         if self._mh_identifiers != self._mh_via_device:
-            # via_device is deprecated in HA 2026.x → resolve to a device_id
-            # via the device registry and use via_device_id instead. If the
-            # parent device isn't yet registered (first-run race), we silently
-            # skip — HA will link them on the next reload.
-            try:
-                dev_reg = dr.async_get(self.hass)
-                parent = dev_reg.async_get_device(identifiers={self._mh_via_device})
+            if _HAS_VIA_DEVICE_ID:
+                # Newer HA: via_device is deprecated, link by device_id.
+                # async_get_device (by identifiers) is deprecated too — look
+                # the parent up within this config entry.
+                reg = dr.async_get(self.hass)
+                lookup = getattr(reg, "async_get_device_by_identifier", None)
+                if lookup is not None:
+                    parent = lookup(self._mh_via_device, self.config_entry.entry_id)
+                else:
+                    parent = reg.async_get_device(identifiers={self._mh_via_device})
                 if parent is not None:
                     info["via_device_id"] = parent.id
-            except Exception:  # noqa: BLE001 — defensive, entity setup must not crash
-                pass
+            else:
+                # HA 2026.5 and older: via_device_id does not exist yet and
+                # passing it makes device registration fail.
+                info["via_device"] = self._mh_via_device
 
         return info
 

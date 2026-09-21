@@ -281,6 +281,9 @@ def translate_local_to_cloud(
                 "demand": bool(int(e.get("f") or 0) & 0x80),
                 "severity": int(e.get("sev") or 0),
                 "severityDesc": "",
+                # Plain temperature probes (boiler room, return pipe) have
+                # nothing to control: no climate / water_heater for them.
+                "_readonly": e.get("t") == LOCAL_T_PROBE,
             }
         )
 

@@ -167,7 +167,7 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
         cloud_err: Exception | None = None
         if self.api is not None:
             try:
-                data = await self.api.async_get_device_info()
+                data = await self.api.async_get_device_info(local_fallback=False)
                 self.active_source = SOURCE_CLOUD
                 self._apply_interval_for_source()
                 # Even in cloud mode, refresh local-state cache every 10 min
