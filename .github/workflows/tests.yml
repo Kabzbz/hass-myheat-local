@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: HA ${{ matrix.homeassistant }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        homeassistant: ["2026.5.4", "2026.9.3"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install Home Assistant ${{ matrix.homeassistant }} and test tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install "homeassistant==${{ matrix.homeassistant }}" pytest-homeassistant-custom-component ruff
+
+      - name: Lint (errors only)
+        run: ruff check --select F,E9 --output-format github custom_components tests
+
+      - name: Tests
+        run: python -m pytest -q
