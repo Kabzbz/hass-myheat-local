@@ -17,11 +17,13 @@
 
 Этот форк добавляет **локальный HTTP API** к контроллеру (порт 80, по адресу типа `192.168.1.50`):
 
-- **Hybrid режим** (рекомендуется): cloud-first → при сбое автоматически переключается на local → когда облако оживает, возвращается обратно.
+- **Hybrid режим** (рекомендуется): cloud-first → при сбое автоматически переключается на local → когда облако оживает, возвращается обратно. На local переходит и тогда, когда облако отвечает, но больше 20 минут не получало данных от контроллера (`dataActual=false`).
 - **Local-only режим**: только локальный API, облако вообще не дёргается. Для тех, у кого нет интернета вообще.
 - **Cloud-only режим**: как было у vooon, для совместимости.
 
 В UI отдельный сенсор показывает текущий источник данных (`cloud` / `local` / `offline`).
+
+> ⚠️ Локальное подключение использует внутренние запросы веб-интерфейса контроллера. Это **не официальный API** MyHeat: он не документирован и может измениться после обновления прошивки контроллера. Тогда локальный режим перестанет работать, пока интеграцию не поправят; гибридный режим продолжит получать данные из облака.
 
 ## Что есть сверх апстрима
 
@@ -452,6 +454,12 @@ automation:
 
 Недоступность облака — обычное дело (у контроллера пропадает интернет, облако тормозит), при включённом локальном подключении данные идут с контроллера. Поэтому в логе одно предупреждение `MyHeat cloud: getDeviceInfo failed: no answer in 10 s` на весь сбой (без трейсбека), строка `Switched to LOCAL source (...)` при переходе на контроллер и `MyHeat cloud answers again` / `Switched back to CLOUD source`, когда облако вернулось. Подробности каждого повтора — на уровне debug.
 
+Бывает, что облако отвечает, но само давно не получало данных от контроллера (`dataActual=false`, обычно у контроллера пропал интернет). В гибридном режиме данные тогда берутся с контроллера — в логе `Switched to LOCAL source (cloud: no fresh data from the controller)`. Без локального подключения — одно предупреждение `MyHeat cloud has no fresh data from the controller (dataActual=false)` на весь сбой, датчики показывают «Неизвестно»; когда данные снова свежие — `MyHeat cloud has fresh controller data again`.
+
+## Контроллер пропустил ответ
+
+Контроллер иногда не отвечает на отдельный запрос — это нормально. Один-два пропуска подряд интеграция переносит молча: датчики сохраняют последние значения, пропущенный шаг в счётчики времени и газа не засчитывается. Ошибка в логе (`Error fetching … burner data` у опроса горелки, `Error fetching … data` у основного опроса в режиме «Только локально» или когда облако недоступно) появляется, только если контроллер промолчал три опроса подряд; тогда датчики становятся «Недоступно» до первого ответа.
+
 ## Логи для багрепорта
 
 ```
@@ -488,8 +496,9 @@ MIT — см. [LICENSE](LICENSE).
 Fork of [vooon/hass-myheat](https://github.com/vooon/hass-myheat) adding:
 
 - **Local HTTP API** to the controller (`POST /api/login`, `getState`, `getObjState`, `setObjState` over port 80)
-- **Hybrid cloud/local fallback** — automatically switches to local when cloud is down, switches back when it recovers
+- **Hybrid cloud/local fallback** — automatically switches to local when cloud is down or has no fresh controller data (`dataActual=false`), switches back when it recovers
 - **Local-only mode** for installs without internet
+- Note: local mode uses the controller's internal web-UI requests, not an official MyHeat API — a firmware update may break it (hybrid mode keeps working through the cloud)
 - **HTTPS support**, **configurable per-source poll intervals**, **configurable timeouts**
 - **`floor_temperature` → climate** fix (upstream issue #197)
 - **Source/availability sensors**: active data source, cloud reachability, controller's internet status, GSM balance/signal, WiFi SSID

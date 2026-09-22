@@ -48,6 +48,7 @@ from .const import (
     DEFAULT_NAME,
     DOMAIN,
     MANUFACTURER,
+    MISSES_BEFORE_ERROR,
     SOURCE_CLOUD,
     VERSION,
 )
@@ -68,6 +69,13 @@ _LOGGER = logging.getLogger(__package__)
 # Integrate on-time only between samples that are at most this many poll
 # intervals apart; a longer gap (controller not answering) is not counted.
 MAX_GAP_INTERVALS = 3
+
+# per-step deltas of a sample; zero in a sample repeated after a miss
+_DELTA_KEYS = (
+    "on_seconds", "ch_seconds", "dhw_seconds",
+    "gas_m3", "gas_ch_m3", "gas_dhw_m3",
+    "ignitions", "dhw_starts",
+)
 
 
 def _positive(value: Any) -> float | None:
@@ -147,6 +155,7 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._prev: tuple[bool, bool, bool] | None = None
         self._prev_state: dict[str, bool] | None = None
         self._seq = 0
+        self._misses = 0  # failed polls in a row
         # pump overrun: flame out while the pump keeps running
         self._overrun_start: float | None = None
         self._overrun_after = ""
@@ -249,8 +258,14 @@ class MhBurnerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Don't integrate across the gap; keep _prev to still detect an
             # ignition that happened while the controller was silent.
             self._prev_t = None
+            self._misses += 1
+            if self.data is not None and self._misses < MISSES_BEFORE_ERROR:
+                _LOGGER.debug("burner poll missed (%d in a row): %s", self._misses, err)
+                # same seq: the counters skip it anyway, the zeros are a safeguard
+                return {**self.data, **dict.fromkeys(_DELTA_KEYS, 0)}
             raise UpdateFailed(f"burner poll: {err}") from err
 
+        self._misses = 0
         now = time.monotonic()
         self.last_obj, self.last_obj_at = obj, now
         heaters = obj.get("heaters") or []

@@ -14,6 +14,7 @@ from .const import (  # noqa: F401
     DEFAULT_CLOUD_POLL_INTERVAL,
     DEFAULT_LOCAL_POLL_INTERVAL,
     DOMAIN,
+    MISSES_BEFORE_ERROR,
     SOURCE_CLOUD,
     SOURCE_LOCAL,
     SOURCE_OFFLINE,
@@ -48,7 +49,8 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
     Behaviour driven by entry.data:
       * local_enabled=False, local_only=False  -> cloud only (legacy)
       * local_enabled=True,  local_only=False  -> cloud first, fall back to
-        local on cloud failure; auto-recover when cloud is back
+        local on cloud failure or when the cloud has no fresh controller
+        data (dataActual=false); auto-recover when cloud is back
       * local_only=True                        -> local only (no cloud calls)
 
     Always exposes self.active_source ∈ {"cloud", "local", "offline"} so
@@ -83,6 +85,9 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
         # consecutive cloud refusals (err != 0) -> ask the user for a new key
         self._cloud_refusals = 0
         self._reauth_started = False
+        # the cloud is being used although it has no fresh controller data
+        self._cloud_stale = False
+        self._local_misses = 0  # failed local reads in a row
         self._cloud_interval = timedelta(seconds=DEFAULT_CLOUD_POLL_INTERVAL)
         self._local_interval = timedelta(
             seconds=int(
@@ -127,7 +132,28 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
         data = translate_local_to_cloud(state=state, obj_state=obj_state)
         self._local_cache = data["_local"]
         self._local_cache_at = time.monotonic()
+        self._local_misses = 0
         return data
+
+    def _keep_after_local_miss(self, err: LocalApiError) -> dict | None:
+        """The previous local data, if this miss is still within a short streak.
+
+        The controller often skips a single request; failing the whole update
+        for it would log an error and blink every entity to "unavailable".
+        """
+        self._local_misses += 1
+        if (
+            self.active_source != SOURCE_LOCAL
+            or self.data is None
+            or self._local_misses >= MISSES_BEFORE_ERROR
+        ):
+            return None
+        _LOGGER.debug(
+            "controller missed an answer (%d in a row): %s",
+            self._local_misses,
+            describe_error(err),
+        )
+        return self.data
 
     async def _get_obj_state(self) -> dict:
         """getObjState, reusing the burner poller's fresh answer when possible.
@@ -208,6 +234,30 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
             )
             self.config_entry.async_start_reauth(self.hass)
 
+    async def _use_cloud(self, data: dict, *, refresh_local: bool = True) -> dict:
+        """Make the cloud answer the active source."""
+        if self.active_source == SOURCE_LOCAL:
+            _LOGGER.info("Switched back to CLOUD source")
+        self.active_source = SOURCE_CLOUD
+        self._apply_interval_for_source()
+        # Once per streak, instead of a warning from every entity on every update
+        stale = not data.get("dataActual")
+        if stale and not self._cloud_stale:
+            _LOGGER.warning(
+                "MyHeat cloud has no fresh data from the controller (dataActual=false)"
+            )
+        elif not stale and self._cloud_stale:
+            _LOGGER.info("MyHeat cloud has fresh controller data again")
+        self._cloud_stale = stale
+        # Even in cloud mode, refresh local-state cache every 10 min
+        # so that Баланс SIM/GSM/WiFi/inet sensors keep showing values.
+        if refresh_local:
+            await self._refresh_local_cache_if_due()
+        if self._local_cache is not None:
+            # new dict: never modify the client's response in place
+            data = {**data, "_local": self._local_cache}
+        return data
+
     async def _async_update_data(self) -> dict:
         """Update via cloud first; fall back to local if enabled."""
         if self._local_only:
@@ -217,48 +267,57 @@ class MhDataUpdateCoordinator(DataUpdateCoordinator[dict]):
                 self._apply_interval_for_source()
                 return data
             except LocalApiError as err:
+                if (kept := self._keep_after_local_miss(err)) is not None:
+                    return kept
                 self.active_source = SOURCE_OFFLINE
                 raise UpdateFailed(f"local: {describe_error(err)}") from err
 
+        can_use_local = self._local_enabled and self.local_api is not None
         # Try cloud
         cloud_err: Exception | None = None
+        stale_cloud: dict | None = None
         if self.api is not None:
             try:
                 data = await self.api.async_get_device_info(local_fallback=False)
-                self._cloud_refusals = 0
-                if self.active_source == SOURCE_LOCAL:
-                    _LOGGER.info("Switched back to CLOUD source")
-                self.active_source = SOURCE_CLOUD
-                self._apply_interval_for_source()
-                # Even in cloud mode, refresh local-state cache every 10 min
-                # so that Баланс SIM/GSM/WiFi/inet sensors keep showing values.
-                await self._refresh_local_cache_if_due()
-                if self._local_cache is not None:
-                    # new dict: never modify the client's response in place
-                    data = {**data, "_local": self._local_cache}
-                return data
             except Exception as err:  # noqa: BLE001 — cloud client raises many types
                 cloud_err = err
                 # the client has already warned (once per outage) with the reason
                 _LOGGER.debug("cloud poll failed: %s", describe_error(err))
                 self._note_cloud_refusal(err)
+            else:
+                self._cloud_refusals = 0
+                if data.get("dataActual") or not can_use_local:
+                    return await self._use_cloud(data)
+                # The cloud answers but has heard nothing from the controller
+                # for 20+ minutes; the controller may still be reachable here.
+                stale_cloud = data
 
-        cloud_why = describe_error(cloud_err) if cloud_err else "not configured"
-        # Cloud failed; try local fallback if user enabled it
-        if self._local_enabled and self.local_api is not None:
+        if stale_cloud is not None:
+            cloud_why = "no fresh data from the controller"
+        else:
+            cloud_why = describe_error(cloud_err) if cloud_err else "not configured"
+        # Cloud failed or is stale; try local fallback if user enabled it
+        if can_use_local:
             try:
                 data = await self._fetch_local()
-                if self.active_source != SOURCE_LOCAL:
-                    _LOGGER.info("Switched to LOCAL source (cloud: %s)", cloud_why)
-                self.active_source = SOURCE_LOCAL
-                self._apply_interval_for_source()
-                return data
             except LocalApiError as err:
+                if (kept := self._keep_after_local_miss(err)) is not None:
+                    return kept  # recent controller data beats stale cloud
+                if stale_cloud is not None:
+                    # old cloud data is still better than none; the local
+                    # cache was just tried, don't ask the controller again
+                    _LOGGER.debug("local fallback failed: %s", describe_error(err))
+                    return await self._use_cloud(stale_cloud, refresh_local=False)
                 self.active_source = SOURCE_OFFLINE
                 raise UpdateFailed(
                     f"both cloud and local failed (cloud: {cloud_why}; "
                     f"local: {describe_error(err)})"
                 ) from err
+            if self.active_source != SOURCE_LOCAL:
+                _LOGGER.info("Switched to LOCAL source (cloud: %s)", cloud_why)
+            self.active_source = SOURCE_LOCAL
+            self._apply_interval_for_source()
+            return data
 
         self.active_source = SOURCE_OFFLINE
         raise UpdateFailed(f"cloud: {cloud_why}")

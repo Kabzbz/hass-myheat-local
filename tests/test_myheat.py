@@ -481,12 +481,13 @@ async def test_counter_not_doubled_when_poll_fails(hass, aioclient_mock, monkeyp
     aioclient_mock.clear_requests()
     aioclient_mock.post(f"{BASE}/api/login", status=500)
     aioclient_mock.post(f"{BASE}/api/getObjState", status=500)
-    clock["t"] += 15
-    await burner.async_refresh()                   # fails -> listeners get stale data
-    await hass.async_block_till_done()
+    for _ in range(burner_mod.MISSES_BEFORE_ERROR):
+        clock["t"] += 15
+        await burner.async_refresh()               # fails -> listeners get stale data
+        await hass.async_block_till_done()
+        # stays available with the same total: the stale sample is not re-added
+        assert float(hass.states.get(eid).state) == after_ok
     assert burner.last_update_success is False
-    # stays available with the same total: the stale sample is not re-added
-    assert float(hass.states.get(eid).state) == after_ok
 
     aioclient_mock.clear_requests()
     mock_local(aioclient_mock)

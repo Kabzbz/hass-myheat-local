@@ -1,7 +1,5 @@
 """MhEntity class"""
 
-import logging
-
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -17,8 +15,6 @@ from .const import (
     VERSION,
 )
 from .coordinator import MhConfigEntry, MhDataUpdateCoordinator
-
-_logger = logging.getLogger(__package__)
 
 _HAS_VIA_DEVICE_ID = "via_device_id" in DeviceInfo.__annotations__
 
@@ -189,8 +185,8 @@ class MhHeaterEntity(MhEntity):
 
     def get_heater(self) -> dict:
         """Return heater state data"""
+        # stale cloud data shows as unknown; the coordinator logs it once
         if not self.coordinator.data or not self.coordinator.data.get("dataActual", False):
-            _logger.warning("data not actual! %s", self.coordinator.data)
             return {}
 
         for h in self.coordinator.data.get("heaters", []):
@@ -262,7 +258,6 @@ class MhEnvEntity(MhEntity):
     def get_env(self) -> dict:
         """Return env state data"""
         if not self.coordinator.data or not self.coordinator.data.get("dataActual", False):
-            _logger.warning("data not actual! %s", self.coordinator.data)
             return {}
 
         for e in self.coordinator.data.get("envs", []):
@@ -323,7 +318,6 @@ class MhEngEntity(MhEntity):
     def get_eng(self) -> dict:
         """Return eng state data"""
         if not self.coordinator.data or not self.coordinator.data.get("dataActual", False):
-            _logger.warning("data not actual! %s", self.coordinator.data)
             return {}
 
         for e in self.coordinator.data.get("engs", []):

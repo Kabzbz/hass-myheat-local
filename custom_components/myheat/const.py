@@ -10,7 +10,7 @@ from homeassistant.const import Platform
 NAME = "MyHeat.net"
 DOMAIN = "myheat"
 DOMAIN_DATA = f"{DOMAIN}_data"
-VERSION = "10.04"
+VERSION = "10.05"
 
 ATTRIBUTION = "https://myheat.net"
 MANUFACTURER = "https://myheat.net"
@@ -46,6 +46,11 @@ DEFAULT_LOCAL_POLL_INTERVAL = 30   # seconds; controller is slow, don't go below
 DEFAULT_CLOUD_POLL_INTERVAL = 30   # seconds
 DEFAULT_LOCAL_TIMEOUT = 30         # seconds per request
 DEFAULT_BURNER_POLL_INTERVAL = 15  # seconds; fast local burner tracking
+
+# The controller often misses a request. Only this many misses in a row make
+# a local poll fail (HA logs an error, entities turn unavailable); shorter
+# streaks keep the last data and log at debug.
+MISSES_BEFORE_ERROR = 3
 
 LOCAL_PROTOCOLS = ["http", "https"]
 
